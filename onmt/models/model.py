@@ -130,12 +130,10 @@ class LanguageModel(BaseModel):
             * decoder output ``(tgt_len, batch, hidden)``
             * dictionary attention dists of ``(tgt_len, batch, src_len)``
         """
-
-        src_embedded = self.decoder.embeddings(src)
         if not bptt:
-            self.decoder.init_state(src, src_embedded, src_embedded)
+            self.decoder.init_state(src, None, None)
         dec_out, attns = self.decoder(
-            src, src_embedded, memory_lengths=lengths, with_align=with_align
+            src, memory_bank=None, memory_lengths=lengths, with_align=with_align
         )
         return dec_out, attns
 
