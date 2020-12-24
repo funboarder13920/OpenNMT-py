@@ -363,9 +363,17 @@ class Trainer(object):
                     self.optim.zero_grad()
 
                 with torch.cuda.amp.autocast(enabled=self.optim.amp):
+
+                    from torchsummary import summary
+                    print(summary(self.model, src, tgt, src_lengths, depth=8))
                     outputs, attns = self.model(
                         src, tgt, src_lengths, bptt=bptt,
                         with_align=self.with_align)
+                    from torchviz import make_dot
+                    make_dot(outputs, params=dict(list(self.model.named_parameters()))).render("print_opennmt", format="png")
+
+                    raise ValueError
+
                     bptt = True
 
                     # 3. Compute loss.

@@ -17,9 +17,10 @@ class Statistics(object):
     * elapsed time
     """
 
-    def __init__(self, loss=0, n_words=0, n_correct=0):
+    def __init__(self, loss=0, n_words=0, n_correct=0, n_words_pretoken=0):
         self.loss = loss
         self.n_words = n_words
+        self.n_words_pretoken = n_words_pretoken
         self.n_correct = n_correct
         self.n_src_words = 0
         self.start_time = time.time()
@@ -81,6 +82,7 @@ class Statistics(object):
         self.loss += stat.loss
         self.n_words += stat.n_words
         self.n_correct += stat.n_correct
+        self.n_words_pretoken += stat.n_words_pretoken
 
         if update_n_src_words:
             self.n_src_words += stat.n_src_words
@@ -95,7 +97,7 @@ class Statistics(object):
 
     def ppl(self):
         """ compute perplexity """
-        return math.exp(min(self.loss / self.n_words, 100))
+        return math.exp(min(self.loss / (self.n_words_pretoken if self.n_words_pretoken else self.n_words), 100))
 
     def elapsed_time(self):
         """ compute elapsed time """

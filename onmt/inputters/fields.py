@@ -5,6 +5,7 @@ from onmt.utils.logging import logger
 from onmt.utils.misc import check_path
 from onmt.inputters.inputter import get_fields, _load_vocab, \
     _build_fields_vocab
+from torchtext.data import Field
 
 
 def _get_dynamic_fields(opts):
@@ -75,6 +76,8 @@ def load_fields(save_data, checkpoint=None):
     if checkpoint is not None:
         logger.info("Loading fields from checkpoint...")
         fields = checkpoint['vocab']
+        # remove me
+        fields["nb_tokens_test"] = Field(use_vocab=False, dtype=torch.int16, sequential=False)
     else:
         fields_path = "{}.vocab.pt".format(save_data)
         logger.info(f"Loading fields from {fields_path}...")

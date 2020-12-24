@@ -182,6 +182,8 @@ def get_fields(
     indices = Field(use_vocab=False, dtype=torch.long, sequential=False)
     fields["indices"] = indices
 
+    fields["nb_tokens_test"] = Field(use_vocab=False, dtype=torch.int16, sequential=False)
+
     if dynamic_dict:
         src_map = Field(
             use_vocab=False, dtype=torch.float,
@@ -229,6 +231,8 @@ class IterOnDevice(object):
                 if hasattr(batch, 'src_map') else None
             batch.align = batch.align.to(device) \
                 if hasattr(batch, 'align') else None
+            batch.nb_tokens_test = batch.nb_tokens_test.to(device) \
+                if hasattr(batch, 'nb_tokens_test') else None
 
     def __iter__(self):
         for batch in self.iterable:

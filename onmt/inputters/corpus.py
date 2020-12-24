@@ -46,7 +46,7 @@ class DatasetAdapter(object):
 
     valid_field_name = (
         'src', 'tgt', 'indices', 'src_map', 'src_ex_vocab', 'alignment',
-        'align')
+        'align', 'nb_tokens_test')
 
     def __init__(self, fields, is_train):
         self.fields_dict = self._valid_fields(fields)
@@ -66,6 +66,7 @@ class DatasetAdapter(object):
         example, transform, cid = item
         # this is a hack: appears quicker to apply it here
         # than in the ParallelCorpusIterator
+
         maybe_example = transform.apply(
             example, is_train=is_train, corpus_name=cid)
         if maybe_example is None:

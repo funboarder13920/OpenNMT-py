@@ -41,9 +41,9 @@ def build_loss_compute(model, tgt_field, opt, train=True):
             opt.label_smoothing, len(tgt_field.vocab), ignore_index=padding_idx
         )
     elif isinstance(model.generator[-1], LogSparsemax):
-        criterion = SparsemaxLoss(ignore_index=padding_idx, reduction='sum')
+        criterion = SparsemaxLoss(ignore_index=padding_idx, reduction='sum' if train else 'none')
     else:
-        criterion = nn.NLLLoss(ignore_index=padding_idx, reduction='sum')
+        criterion = nn.NLLLoss(ignore_index=padding_idx, reduction='sum' if train else 'none')
 
     # if the loss function operates on vectors of raw logits instead of
     # probabilities, only the first part of the generator needs to be
@@ -199,7 +199,7 @@ class LossComputeBase(nn.Module):
             batch_stats.update(stats)
         return None, batch_stats
 
-    def _stats(self, loss, scores, target):
+    def _stats(self, loss, scores, target, repeat_nb_tokens_test):
         """
         Args:
             loss (:obj:`FloatTensor`): the loss computed by the loss criterion.
@@ -211,9 +211,13 @@ class LossComputeBase(nn.Module):
         """
         pred = scores.max(1)[1]
         non_padding = target.ne(self.padding_idx)
+        n_words_pretoken = 0
         num_correct = pred.eq(target).masked_select(non_padding).sum().item()
         num_non_padding = non_padding.sum().item()
-        return onmt.utils.Statistics(loss.item(), num_non_padding, num_correct)
+        if repeat_nb_tokens_test is not None:
+            n_words_pretoken = ((repeat_nb_tokens_test[:,0]+1).true_divide(repeat_nb_tokens_test[:,1]+1))[non_padding].sum().item()
+            # maybe two losses / two stats ?
+        return onmt.utils.Statistics(loss.item(), num_non_padding, num_correct, n_words_pretoken)
 
     def _bottle(self, _v):
         return _v.view(-1, _v.size(2))
@@ -290,6 +294,10 @@ class CommonLossCompute(LossComputeBase):
         gtruth = target.view(-1)
 
         loss = self.criterion(scores, gtruth)
+        repeat_nb_tokens_test = None
+        if loss.shape:
+            repeat_nb_tokens_test = self._bottle(batch.nb_tokens_test.repeat(target.size(0), 1, 1))
+            loss = loss.sum()
         if self.lambda_coverage != 0.0:
             coverage_loss = self._compute_coverage_loss(
                 std_attn=std_attn, coverage_attn=coverage_attn)
@@ -302,8 +310,7 @@ class CommonLossCompute(LossComputeBase):
             align_loss = self._compute_alignement_loss(
                 align_head=align_head, ref_align=ref_align)
             loss += align_loss
-        stats = self._stats(loss.clone(), scores, gtruth)
-
+        stats = self._stats(loss.clone(), scores, gtruth, repeat_nb_tokens_test)
         return loss, stats
 
     def _compute_coverage_loss(self, std_attn, coverage_attn):

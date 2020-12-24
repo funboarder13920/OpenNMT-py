@@ -569,6 +569,7 @@ class TransformerLMDecoderLayer(TransformerDecoderLayerBase):
 
         output = self.drop(query) + inputs
 
+        # enlever layer_norm_2
         output_feedforward = self.feed_forward(self.layer_norm_2(output))
 
         output_norm = self.drop(output_feedforward) + output
