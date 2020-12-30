@@ -283,6 +283,7 @@ def _build_field_vocab(field, counter, size_multiple=1, **kwargs):
     all_special.extend(list(kwargs.pop('specials', [])))
     specials = list(OrderedDict.fromkeys(
         tok for tok in all_special if tok is not None))
+    specials = []
     field.vocab = field.vocab_cls(counter, specials=specials, **kwargs)
     if size_multiple > 1:
         _pad_vocab_to_multiple(field.vocab, size_multiple)
@@ -357,6 +358,7 @@ def _build_fields_vocab(fields, counters, data_type, share_vocab,
             src_field = src_multifield.base_field
             tgt_field = tgt_multifield.base_field
             _all_specials = [item for item in src_specials + tgt_specials]
+            _all_specials = []
             _merge_field_vocabs(
                 src_field, tgt_field, vocab_size=src_vocab_size,
                 min_freq=src_words_min_frequency,
@@ -469,6 +471,7 @@ def _merge_field_vocabs(src_field, tgt_field, vocab_size, min_freq,
     all_specials = list(OrderedDict.fromkeys(
         tok for tok in init_specials + specials
         if tok is not None))
+    all_specials = []
     merged = sum(
         [src_field.vocab.freqs, tgt_field.vocab.freqs], Counter()
     )

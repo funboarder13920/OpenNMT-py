@@ -102,6 +102,7 @@ class Embeddings(nn.Module):
             `-feat_merge mlp`
         dropout (float): dropout probability.
         freeze_word_vecs (bool): freeze weights of word vectors.
+        pos_emb_max_len (int): max length of positional encoding.
     """
 
     def __init__(self, word_vec_size,
@@ -115,7 +116,8 @@ class Embeddings(nn.Module):
                  feat_vocab_sizes=[],
                  dropout=0,
                  sparse=False,
-                 freeze_word_vecs=False):
+                 freeze_word_vecs=False,
+                 pos_emb_max_len=5000):
         self._validate_args(feat_merge, feat_vocab_sizes, feat_vec_exponent,
                             feat_vec_size, feat_padding_idx)
 
@@ -174,7 +176,7 @@ class Embeddings(nn.Module):
         self.position_encoding = position_encoding
 
         if self.position_encoding:
-            pe = PositionalEncoding(dropout, self.embedding_size)
+            pe = PositionalEncoding(dropout, self.embedding_size, pos_emb_max_len)
             self.make_embedding.add_module('pe', pe)
 
         if freeze_word_vecs:

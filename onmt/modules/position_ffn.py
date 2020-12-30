@@ -1,6 +1,15 @@
 """Position feed-forward network from "Attention is All You Need"."""
 
 import torch.nn as nn
+import torch
+import math
+
+def gelu_new(x):
+    """
+    Implementation of the GELU activation function currently in Google BERT repo (identical to OpenAI GPT). Also see
+    the Gaussian Error Linear Units paper: https://arxiv.org/abs/1606.08415
+    """
+    return 0.5 * x * (1.0 + torch.tanh(math.sqrt(2.0 / math.pi) * (x + 0.044715 * torch.pow(x, 3.0))))
 
 
 class PositionwiseFeedForward(nn.Module):
@@ -18,9 +27,8 @@ class PositionwiseFeedForward(nn.Module):
         self.w_1 = nn.Linear(d_model, d_ff)
         self.w_2 = nn.Linear(d_ff, d_model)
         self.layer_norm = nn.LayerNorm(d_model, eps=1e-6)
-        self.dropout_1 = nn.Dropout(dropout)
-        self.relu = nn.ReLU()
-        self.dropout_2 = nn.Dropout(dropout)
+        self.relu = gelu_new
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         """Layer definition.
@@ -32,10 +40,9 @@ class PositionwiseFeedForward(nn.Module):
             (FloatTensor): Output ``(batch_size, input_len, model_dim)``.
         """
 
-        inter = self.dropout_1(self.relu(self.w_1(self.layer_norm(x))))
-        output = self.dropout_2(self.w_2(inter))
+        inter = self.relu(self.w_1(self.layer_norm(x)))
+        output = self.dropout(self.w_2(inter))
         return output + x
 
     def update_dropout(self, dropout):
-        self.dropout_1.p = dropout
-        self.dropout_2.p = dropout
+        self.dropout.p = dropout

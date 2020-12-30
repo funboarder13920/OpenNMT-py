@@ -2,10 +2,10 @@
 
 
 class DefaultTokens(object):
-    PAD = '<blank>'
-    BOS = '<s>'
-    EOS = '</s>'
-    UNK = '<unk>'
+    PAD = '<|endoftext|>'
+    BOS = '<|endoftext|>'
+    EOS = '<|endoftext|>'
+    UNK = '<|endoftext|>'
     MASK = '<mask>'
     VOCAB_PAD = 'averyunlikelytoken'
     SENT_FULL_STOPS = [".", "?", "!"]

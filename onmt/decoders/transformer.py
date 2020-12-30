@@ -632,6 +632,7 @@ class TransformerLMDecoder(TransformerDecoderBase):
         """Decode, possibly stepwise."""
         if step == 0:
             self._init_cache()
+            tgt = tgt[1:]
 
         tgt_words = tgt[:, :, 0].transpose(0, 1)
 

@@ -225,6 +225,8 @@ def model_opts(parser):
     group.add('--position_encoding', '-position_encoding', action='store_true',
               help="Use a sin to mark relative words positions. "
                    "Necessary for non-RNN style models.")
+    group.add('--pos_emb_max_len', '-pos_emb_max_len', type=int, default=5000,
+              help='Positional Embedding max length')
 
     group = parser.add_argument_group('Model-Embedding Features')
     group.add('--feat_merge', '-feat_merge', type=str, default='concat',
@@ -702,6 +704,8 @@ def translate_opts(parser):
               help="Path to model .pt file(s). "
                    "Multiple models can be specified, "
                    "for ensemble decoding.")
+    group.add('--weights_huggingface', '-weights_huggingface', type=str, required=False,
+              help="Path to huggingface model weights .bin")
     group.add('--fp32', '-fp32', action='store_true',
               help="Force the model to be in FP32 "
                    "because FP16 is very slow on GTX1080(ti).")

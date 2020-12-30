@@ -6,6 +6,7 @@ import re
 import torch
 import torch.nn as nn
 from torch.nn.init import xavier_uniform_
+import math
 
 import onmt.modules
 from onmt.encoders import str2enc
@@ -35,8 +36,9 @@ def build_embeddings(opt, text_field, for_encoder=True):
     num_embs = [len(f.vocab) for _, f in text_field]
     num_word_embeddings, num_feat_embeddings = num_embs[0], num_embs[1:]
 
-    freeze_word_vecs = opt.freeze_word_vecs_enc if for_encoder \
-        else opt.freeze_word_vecs_dec
+    freeze_word_vecs = (
+        opt.freeze_word_vecs_enc if for_encoder else opt.freeze_word_vecs_dec
+    )
 
     emb = Embeddings(
         word_vec_size=emb_dim,
@@ -50,7 +52,8 @@ def build_embeddings(opt, text_field, for_encoder=True):
         word_vocab_size=num_word_embeddings,
         feat_vocab_sizes=num_feat_embeddings,
         sparse=opt.optim == "sparseadam",
-        freeze_word_vecs=freeze_word_vecs
+        freeze_word_vecs=freeze_word_vecs,
+        pos_emb_max_len=opt.pos_emb_max_len,
     )
     return emb
 
@@ -73,30 +76,128 @@ def build_decoder(opt, embeddings):
         opt: the option in current environment.
         embeddings (Embeddings): vocab embeddings for this decoder.
     """
-    dec_type = "ifrnn" if opt.decoder_type == "rnn" and opt.input_feed \
-               else opt.decoder_type
+    dec_type = (
+        "ifrnn"
+        if opt.decoder_type == "rnn" and opt.input_feed
+        else opt.decoder_type
+    )
     return str2dec[dec_type].from_opt(opt, embeddings)
+
+
+def convert_huggingface_state_dict(weights_huggingface_path, checkpoint):
+    hf_state_dict = torch.load(
+        weights_huggingface_path, map_location=lambda storage, loc: storage
+    )
+    onmt_hf_key_pairs = []
+    regex_renamings = [
+        (
+            r"wte\.weight",
+            r"decoder.embeddings.make_embedding.emb_luts.0.weight",
+        ),
+        (r"wpe\.weight", r"decoder.embeddings.make_embedding.pe.pe"),
+        (
+            r"(h)(\.[0-9]+\.)(ln_1)",
+            r"decoder.transformer_layers\2layer_norm_1",
+        ),
+        (
+            r"(h)(\.[0-9]+\.)(ln_2)",
+            r"decoder.transformer_layers\2feed_forward.layer_norm",
+        ),
+        (
+            r"(h)(\.[0-9]+\.)(mlp\.c_fc)",
+            r"decoder.transformer_layers\2feed_forward.w_1",
+        ),
+        (
+            r"(h)(\.[0-9]+\.)(mlp\.c_proj)",
+            r"decoder.transformer_layers\2feed_forward.w_2",
+        ),
+        (
+            r"(h)(\.[0-9]+\.)(attn\.c_proj)",
+            r"decoder.transformer_layers\2self_attn.final_linear",
+        ),
+        (
+            r"(h)(\.[0-9]+\.)(attn.c_attn)(\.(bias|weight))(\.)(\w+)",
+            r"decoder.transformer_layers\2self_attn.linear_\7\4",
+        ),
+        (r"^ln_f", r"decoder.layer_norm"),
+    ]
+
+    # fix sizes
+    hf_state_dict["wpe.weight"] = hf_state_dict["wpe.weight"].unsqueeze(1)
+    hf_state_dict["wte.weight"] = hf_state_dict["wte.weight"] / math.sqrt(
+        hf_state_dict["wte.weight"].size(1)
+    )
+    keys_hf = list(hf_state_dict.keys())
+    for key_hf in keys_hf:
+        if (
+            "mlp.c_" in key_hf or "attn.c_proj" in key_hf
+        ) and ".weight" in key_hf:
+            # permute
+            hf_state_dict[key_hf] = hf_state_dict[key_hf].permute(1, 0)
+        if "attn.c_attn" in key_hf:
+            # divide in Q K V
+            Q_K_V_attn = hf_state_dict.pop(key_hf)
+            Q_attn, K_attn, V_attn = Q_K_V_attn.split(
+                Q_K_V_attn.size(-1) // 3, dim=-1
+            )
+            if len(Q_K_V_attn.shape) == 2:
+                Q_attn = Q_attn.permute(1, 0)
+                K_attn = K_attn.permute(1, 0)
+                V_attn = V_attn.permute(1, 0)
+            hf_state_dict[f"{key_hf}.query"] = Q_attn
+            hf_state_dict[f"{key_hf}.keys"] = K_attn
+            hf_state_dict[f"{key_hf}.values"] = V_attn
+    # rename
+    for key_hf in hf_state_dict.keys():
+        for regex_hf, regex_onmt in regex_renamings:
+            result = re.sub(regex_hf, regex_onmt, key_hf)
+            if result != key_hf:
+                onmt_hf_key_pairs.append((result, key_hf))
+
+    for key_onmt, key_hf in onmt_hf_key_pairs:
+        hf_state_dict[key_onmt] = hf_state_dict.pop(key_hf)
+
+    # model.load_state_dict(hf_state_dict)
+    return hf_state_dict
+
+
+def load_weights_from_hf(weights_huggingface_path, checkpoint):
+    hf_state_dict = convert_huggingface_state_dict(
+        weights_huggingface_path, checkpoint
+    )
+    checkpoint["model"].update(hf_state_dict)
+    we_weights = hf_state_dict[
+        "decoder.embeddings.make_embedding.emb_luts.0.weight"
+    ]
+    checkpoint["generator"]["0.weight"] = we_weights
+    checkpoint["generator"]["0.bias"] = torch.zeros(
+        we_weights.size(0), device=we_weights.device
+    )
 
 
 def load_test_model(opt, model_path=None):
     if model_path is None:
         model_path = opt.models[0]
-    checkpoint = torch.load(model_path,
-                            map_location=lambda storage, loc: storage)
+    checkpoint = torch.load(
+        model_path, map_location=lambda storage, loc: storage
+    )
 
-    model_opt = ArgumentParser.ckpt_model_opts(checkpoint['opt'])
+    model_opt = ArgumentParser.ckpt_model_opts(checkpoint["opt"])
+    if opt.weights_huggingface:
+        load_weights_from_hf(opt.weights_huggingface, checkpoint)
     ArgumentParser.update_model_opts(model_opt)
     ArgumentParser.validate_model_opts(model_opt)
-    fields = checkpoint['vocab']
-
-    model = build_base_model(model_opt, fields, use_gpu(opt), checkpoint,
-                             opt.gpu)
+    fields = checkpoint["vocab"]
+    model = build_base_model(
+        model_opt, fields, use_gpu(opt), checkpoint, opt.gpu
+    )
     if opt.fp32:
         model.float()
     elif opt.int8:
         if opt.gpu >= 0:
             raise ValueError(
-                "Dynamic 8-bit quantization is not supported on GPU")
+                "Dynamic 8-bit quantization is not supported on GPU"
+            )
         torch.quantization.quantize_dynamic(model, inplace=True)
     model.eval()
     model.generator.eval()
@@ -203,10 +304,11 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None, gpu_id=None):
         else:
             gen_func = nn.LogSoftmax(dim=-1)
         generator = nn.Sequential(
-            nn.Linear(model_opt.dec_rnn_size,
-                      len(fields["tgt"].base_field.vocab)),
+            nn.Linear(
+                model_opt.dec_rnn_size, len(fields["tgt"].base_field.vocab)
+            ),
             Cast(torch.float32),
-            gen_func
+            gen_func,
         )
         if model_opt.share_decoder_embeddings:
             generator[0].weight = model.decoder.embeddings.word_lut.weight
@@ -222,18 +324,21 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None, gpu_id=None):
     if checkpoint is not None:
         # This preserves backward-compat for models using customed layernorm
         def fix_key(s):
-            s = re.sub(r'(.*)\.layer_norm((_\d+)?)\.b_2',
-                       r'\1.layer_norm\2.bias', s)
-            s = re.sub(r'(.*)\.layer_norm((_\d+)?)\.a_2',
-                       r'\1.layer_norm\2.weight', s)
+            s = re.sub(
+                r"(.*)\.layer_norm((_\d+)?)\.b_2", r"\1.layer_norm\2.bias", s
+            )
+            s = re.sub(
+                r"(.*)\.layer_norm((_\d+)?)\.a_2", r"\1.layer_norm\2.weight", s
+            )
             return s
 
-        checkpoint['model'] = {fix_key(k): v
-                               for k, v in checkpoint['model'].items()}
+        checkpoint["model"] = {
+            fix_key(k): v for k, v in checkpoint["model"].items()
+        }
         # end of patch for backward compatibility
 
-        model.load_state_dict(checkpoint['model'], strict=False)
-        generator.load_state_dict(checkpoint['generator'], strict=False)
+        model.load_state_dict(checkpoint["model"], strict=False)
+        generator.load_state_dict(checkpoint["generator"], strict=False)
     else:
         if model_opt.param_init != 0.0:
             for p in model.parameters():
@@ -250,20 +355,22 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None, gpu_id=None):
 
         if hasattr(model, "encoder") and hasattr(model.encoder, "embeddings"):
             model.encoder.embeddings.load_pretrained_vectors(
-                model_opt.pre_word_vecs_enc)
-        if hasattr(model.decoder, 'embeddings'):
+                model_opt.pre_word_vecs_enc
+            )
+        if hasattr(model.decoder, "embeddings"):
             model.decoder.embeddings.load_pretrained_vectors(
-                model_opt.pre_word_vecs_dec)
+                model_opt.pre_word_vecs_dec
+            )
 
     model.generator = generator
     model.to(device)
-    if model_opt.model_dtype == 'fp16' and model_opt.optim == 'fusedadam':
+    if model_opt.model_dtype == "fp16" and model_opt.optim == "fusedadam":
         model.half()
     return model
 
 
 def build_model(model_opt, opt, fields, checkpoint):
-    logger.info('Building model...')
+    logger.info("Building model...")
     model = build_base_model(model_opt, fields, use_gpu(opt), checkpoint)
     logger.info(model)
     return model
