@@ -601,8 +601,13 @@ class TestBeamSearchLM(TestBeamSearchAgainstReferenceCase):
         self.third_step(beam, expected_beam_scores, 1)
 
         n_steps = beam.alive_seq.shape[-1] - 1
+<<<<<<< HEAD
         self.assertTrue(beam.memory_lengths.equal(
             n_steps+fn_map_state(src_lengths, dim=0)))
+=======
+        self.assertTrue(beam.memory_lengths.equal(n_steps+fn_map_state(
+            src_lengths, dim=0)))
+>>>>>>> fix_gpt2_archi
 
     def test_beam_lm_update_memory_length_when_finished(self):
         beam = BeamSearchLM(
