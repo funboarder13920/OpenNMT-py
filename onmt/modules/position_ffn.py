@@ -4,7 +4,7 @@ import torch.nn as nn
 
 
 ACTIVATION_FUNCTIONS = {
-    "relu": nn.ReLU,
+    "relu": nn.GELU,
     "gelu": nn.GELU,
 }
 
