@@ -60,4 +60,5 @@ class PositionwiseFeedForward(nn.Module):
         return output + x
 
     def update_dropout(self, dropout):
-        self.dropout.p = dropout
+        self.dropout_1.p = dropout
+        self.dropout_2.p = dropout
