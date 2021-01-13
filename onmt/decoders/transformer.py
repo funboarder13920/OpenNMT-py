@@ -9,6 +9,7 @@ import torch.nn as nn
 from onmt.decoders.decoder import DecoderBase
 from onmt.modules import MultiHeadedAttention, AverageAttention
 from onmt.modules.position_ffn import PositionwiseFeedForward
+from onmt.modules.position_ffn import ActivationFunction
 from onmt.utils.misc import sequence_mask
 
 
@@ -25,6 +26,7 @@ class TransformerDecoderLayerBase(nn.Module):
         aan_useffn=False,
         full_context_alignment=False,
         alignment_heads=0,
+        pos_ffn_activation_fn=ActivationFunction.relu,
     ):
         """
         Args:
@@ -49,6 +51,9 @@ class TransformerDecoderLayerBase(nn.Module):
                 alignment
             alignment_heads (int):
                 N. of cross attention heads to use for alignment guiding
+            pos_ffn_activation_fn (ActivationFunction):
+                activation function choice for PositionwiseFeedForward layer
+
         """
         super(TransformerDecoderLayerBase, self).__init__()
 
@@ -64,7 +69,9 @@ class TransformerDecoderLayerBase(nn.Module):
                 d_model, dropout=attention_dropout, aan_useffn=aan_useffn
             )
 
-        self.feed_forward = PositionwiseFeedForward(d_model, d_ff, dropout)
+        self.feed_forward = PositionwiseFeedForward(
+            d_model, d_ff, dropout, pos_ffn_activation_fn
+        )
         self.layer_norm_1 = nn.LayerNorm(d_model, eps=1e-6)
         self.drop = nn.Dropout(dropout)
         self.full_context_alignment = full_context_alignment
@@ -184,6 +191,7 @@ class TransformerDecoderLayer(TransformerDecoderLayerBase):
         aan_useffn=False,
         full_context_alignment=False,
         alignment_heads=0,
+        pos_ffn_activation_fn=ActivationFunction.relu,
     ):
         """
         Args:
@@ -200,6 +208,7 @@ class TransformerDecoderLayer(TransformerDecoderLayerBase):
             aan_useffn,
             full_context_alignment,
             alignment_heads,
+            pos_ffn_activation_fn=pos_ffn_activation_fn,
         )
         self.context_attn = MultiHeadedAttention(
             heads, d_model, dropout=attention_dropout
@@ -307,6 +316,7 @@ class TransformerDecoderBase(DecoderBase):
             opt.full_context_alignment,
             opt.alignment_layer,
             alignment_heads=opt.alignment_heads,
+            pos_ffn_activation_fn=opt.pos_ffn_activation_fn,
         )
 
     def init_state(self, src, memory_bank, enc_hidden):
@@ -395,6 +405,7 @@ class TransformerDecoder(TransformerDecoderBase):
         full_context_alignment,
         alignment_layer,
         alignment_heads,
+        pos_ffn_activation_fn=ActivationFunction.relu,
     ):
         super(TransformerDecoder, self).__init__(
             d_model, copy_attn, embeddings, alignment_layer
@@ -413,6 +424,7 @@ class TransformerDecoder(TransformerDecoderBase):
                     aan_useffn=aan_useffn,
                     full_context_alignment=full_context_alignment,
                     alignment_heads=alignment_heads,
+                    pos_ffn_activation_fn=pos_ffn_activation_fn,
                 )
                 for i in range(num_layers)
             ]
@@ -600,6 +612,7 @@ class TransformerLMDecoder(TransformerDecoderBase):
         full_context_alignment=None,
         alignment_layer=None,
         alignment_heads=None,
+        pos_ffn_activation_fn=ActivationFunction.relu,
     ):
         super(TransformerLMDecoder, self).__init__(
             d_model, copy_attn, embeddings, None
@@ -617,6 +630,7 @@ class TransformerLMDecoder(TransformerDecoderBase):
                     aan_useffn=aan_useffn,
                     full_context_alignment=None,
                     alignment_heads=None,
+                    pos_ffn_activation_fn=pos_ffn_activation_fn,
                 )
                 for i in range(num_layers)
             ]
