@@ -6,6 +6,7 @@ from waitress import serve
 from onmt.translate import TranslationServer, ServerModelError
 import logging
 from logging.handlers import RotatingFileHandler
+from onmt.utils.parse import ArgumentParser
 
 STATUS_OK = "ok"
 STATUS_ERROR = "error"
@@ -88,10 +89,36 @@ def start(
 
         return jsonify(out)
 
+    def update_server_model_opt(server_model, new_opt):
+        # see translation_server l369 to check opts and parse
+        # parser = ArgumentParser()
+        # print(parser._action_groups[0].title)
+        # print(server_model.opt)
+        # parse_args = ""
+        # print(parser._action_groups)
+        # print(parser._actions)
+        
+        # for (k, v) in old_translate_opt.items():
+        #     if k not in new_opt_dict:
+        #         parse_args += f"-{k} {v} "
+        # for (k, v) in new_opt_dict.items():
+        #     parse_args += f"-{k} {v} "
+        # new_opt = parser.parse_args(parse_args)
+        # ArgumentParser.validate_translate_opts(new_opt)
+        server_model.translator.update_translate_opt(*new_opt)
+        # maybe does not work:
+        server_model.opt.update(new_opt)
+        ArgumentParser.validate_translate_opts(new_opt)
+
+
     @app.route("/huggingface_proxy", methods=["POST"])
     def huggingface_proxy():
         data = request.get_json(force=True)
         src = data["context"]
+        # translation_server.models[100].opt.n_best = 6
+        # translation_server.models[100].translator.n_best = 6
+        data["opt"] = ""
+        update_server_model_opt(translation_server.models[100], data["opt"])
         out = translate_from_inputs([{"src": src, "id": 100}])
         sentences = []
         for trans in out:

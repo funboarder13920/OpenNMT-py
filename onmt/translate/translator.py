@@ -232,6 +232,37 @@ class Inference(object):
 
         set_random_seed(seed, self._use_cuda)
 
+    def update_translate_opt(
+        self,
+        n_best,
+        min_length,
+        max_length,
+        ratio,
+        beam_size,
+        random_sampling_topk,
+        random_sampling_topp,
+        random_sampling_temp,
+        stepwise_penalty,
+        dump_beam,
+        block_ngram_repeat,
+        ignore_when_blocking,
+        ban_unk_token,
+    ):
+        self.n_best = n_best
+        self.min_length = min_length
+        self.max_length = max_length
+        self.ratio = ratio
+        self.beam_size = beam_size
+        self.random_sampling_topk = random_sampling_topk
+        self.random_sampling_topp = random_sampling_topp
+        self.random_sampling_temp = random_sampling_temp
+        self.stepwise_penalty = stepwise_penalty
+        self.dump_beam = dump_beam
+        self.block_ngram_repeat = block_ngram_repeat
+        self.ignore_when_blocking = set(ignore_when_blocking)
+        self.ban_unk_token = ban_unk_token
+        self.global_scorer.
+
     @classmethod
     def from_opt(
         cls,
@@ -934,11 +965,13 @@ class GeneratorLM(Inference):
         phrase_table="",
     ):
         if batch_size != 1:
-            warning_msg = ("GeneratorLM does not support batch_size != 1"
-                           " nicely. You can remove this limitation here."
-                           " With batch_size > 1 the end of each input is"
-                           " repeated until the input is finished. Then"
-                           " generation will start.")
+            warning_msg = (
+                "GeneratorLM does not support batch_size != 1"
+                " nicely. You can remove this limitation here."
+                " With batch_size > 1 the end of each input is"
+                " repeated until the input is finished. Then"
+                " generation will start."
+            )
             if self.logger:
                 self.logger.info(warning_msg)
             else:
@@ -1007,7 +1040,7 @@ class GeneratorLM(Inference):
         if min_len_batch > 0 and min_len_batch <= src.size(0):
             # hack [min_len_batch-1:] because expect <bos>
             target_prefix = (
-                src[min_len_batch - 1:]
+                src[min_len_batch - 1 :]
                 if min_len_batch > 0 and min_len_batch <= src.size(0)
                 else None
             )
