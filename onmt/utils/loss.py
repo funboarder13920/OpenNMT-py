@@ -41,9 +41,9 @@ def build_loss_compute(model, tgt_field, opt, train=True):
             opt.label_smoothing, len(tgt_field.vocab), ignore_index=padding_idx
         )
     elif isinstance(model.generator[-1], LogSparsemax):
-        criterion = SparsemaxLoss(ignore_index=padding_idx, reduction='sum' if train else 'none')
+        criterion = SparsemaxLoss(ignore_index=padding_idx, reduction='none')
     else:
-        criterion = nn.NLLLoss(ignore_index=padding_idx, reduction='sum' if train else 'none')
+        criterion = nn.NLLLoss(ignore_index=padding_idx, reduction='none')
 
     # if the loss function operates on vectors of raw logits instead of
     # probabilities, only the first part of the generator needs to be
@@ -252,8 +252,7 @@ class LabelSmoothingLoss(nn.Module):
         model_prob = self.one_hot.repeat(target.size(0), 1)
         model_prob.scatter_(1, target.unsqueeze(1), self.confidence)
         model_prob.masked_fill_((target == self.ignore_index).unsqueeze(1), 0)
-
-        return F.kl_div(output, model_prob, reduction='sum')
+        return F.kl_div(output, model_prob, reduction='none')
 
 
 class CommonLossCompute(LossComputeBase):
