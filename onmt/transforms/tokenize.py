@@ -401,7 +401,7 @@ class ONMTTokenizerTransform(TokenizerTransform):
             n_words = len(example['src']) + len(example['tgt'])
             n_subwords = len(src_out) + len(tgt_out)
             stats.subword(n_subwords, n_words)
-        
+
         example['nb_tokens_test'] = [len(example['src']), len(src_out)]
         example['src'], example['tgt'] = src_out, tgt_out
         return example

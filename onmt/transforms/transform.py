@@ -3,7 +3,6 @@ import torch
 from onmt.utils.logging import logger
 from onmt.utils.misc import check_path
 from onmt.inputters.fields import get_vocabs
-import hashlib
 
 
 class Transform(object):
@@ -186,15 +185,11 @@ class TransformPipe(Transform):
             example (dict): a dict of field value, ex. src, tgt.
 
         """
-        src_example = ' '.join(example['src'][:min(25, len(example['src']))])
         for transform in self.transforms:
             example = transform.apply(
                 example, is_train=is_train, stats=self.statistics, **kwargs)
             if example is None:
                 break
-        if (False and example is not None and hashlib.md5(src_example.encode('utf-8')
-            ).hexdigest()[:3] == "999"):
-            logger.info(f'Sampled example: {src_example}')
         return example
 
     def __getstate__(self):
