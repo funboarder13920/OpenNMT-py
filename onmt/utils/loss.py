@@ -28,22 +28,26 @@ def build_loss_compute(model, tgt_field, opt, train=True):
     unk_idx = tgt_field.vocab.stoi[tgt_field.unk_token]
 
     if opt.lambda_coverage != 0:
-        assert opt.coverage_attn, "--coverage_attn needs to be set in " \
+        assert opt.coverage_attn, (
+            "--coverage_attn needs to be set in "
             "order to use --lambda_coverage != 0"
+        )
 
     if opt.copy_attn:
         criterion = onmt.modules.CopyGeneratorLoss(
-            len(tgt_field.vocab), opt.copy_attn_force,
-            unk_index=unk_idx, ignore_index=padding_idx
+            len(tgt_field.vocab),
+            opt.copy_attn_force,
+            unk_index=unk_idx,
+            ignore_index=padding_idx,
         )
     elif opt.label_smoothing > 0 and train:
         criterion = LabelSmoothingLoss(
             opt.label_smoothing, len(tgt_field.vocab), ignore_index=padding_idx
         )
     elif isinstance(model.generator[-1], LogSparsemax):
-        criterion = SparsemaxLoss(ignore_index=padding_idx, reduction='none')
+        criterion = SparsemaxLoss(ignore_index=padding_idx, reduction="none")
     else:
-        criterion = nn.NLLLoss(ignore_index=padding_idx, reduction='none')
+        criterion = nn.NLLLoss(ignore_index=padding_idx, reduction="none")
 
     # if the loss function operates on vectors of raw logits instead of
     # probabilities, only the first part of the generator needs to be
@@ -54,15 +58,19 @@ def build_loss_compute(model, tgt_field, opt, train=True):
     if opt.copy_attn:
         if opt.model_task == ModelTask.SEQ2SEQ:
             compute = onmt.modules.CopyGeneratorLossCompute(
-                criterion, loss_gen, tgt_field.vocab,
+                criterion,
+                loss_gen,
+                tgt_field.vocab,
                 opt.copy_loss_by_seqlength,
-                lambda_coverage=opt.lambda_coverage
+                lambda_coverage=opt.lambda_coverage,
             )
         elif opt.model_task == ModelTask.LANGUAGE_MODEL:
             compute = onmt.modules.CopyGeneratorLMLossCompute(
-                criterion, loss_gen, tgt_field.vocab,
+                criterion,
+                loss_gen,
+                tgt_field.vocab,
                 opt.copy_loss_by_seqlength,
-                lambda_coverage=opt.lambda_coverage
+                lambda_coverage=opt.lambda_coverage,
             )
         else:
             raise ValueError(
@@ -150,14 +158,16 @@ class LossComputeBase(nn.Module):
         """
         return NotImplementedError
 
-    def __call__(self,
-                 batch,
-                 output,
-                 attns,
-                 normalization=1.0,
-                 shard_size=0,
-                 trunc_start=0,
-                 trunc_size=None):
+    def __call__(
+        self,
+        batch,
+        output,
+        attns,
+        normalization=1.0,
+        shard_size=0,
+        trunc_start=0,
+        trunc_size=None,
+    ):
         """Compute the forward loss, possibly in shards in which case this
         method also runs the backward pass and returns ``None`` as the loss
         value.
@@ -215,9 +225,19 @@ class LossComputeBase(nn.Module):
         num_correct = pred.eq(target).masked_select(non_padding).sum().item()
         num_non_padding = non_padding.sum().item()
         if repeat_nb_tokens_test is not None:
-            n_words_pretoken = ((repeat_nb_tokens_test[:,0]+1).true_divide(repeat_nb_tokens_test[:,1]+1))[non_padding].sum().item()
+            n_words_pretoken = (
+                (
+                    (repeat_nb_tokens_test[:, 0] + 1).true_divide(
+                        repeat_nb_tokens_test[:, 1] + 1
+                    )
+                )[non_padding]
+                .sum()
+                .item()
+            )
             # maybe two losses / two stats ?
-        return onmt.utils.Statistics(loss.item(), num_non_padding, num_correct, n_words_pretoken)
+        return onmt.utils.Statistics(
+            loss.item(), num_non_padding, num_correct, n_words_pretoken
+        )
 
     def _bottle(self, _v):
         return _v.view(-1, _v.size(2))
@@ -232,6 +252,7 @@ class LabelSmoothingLoss(nn.Module):
     KL-divergence between q_{smoothed ground truth prob.}(w)
     and p_{prob. computed by model}(w) is minimized.
     """
+
     def __init__(self, label_smoothing, tgt_vocab_size, ignore_index=-100):
         assert 0.0 < label_smoothing <= 1.0
         self.ignore_index = ignore_index
@@ -240,7 +261,7 @@ class LabelSmoothingLoss(nn.Module):
         smoothing_value = label_smoothing / (tgt_vocab_size - 2)
         one_hot = torch.full((tgt_vocab_size,), smoothing_value)
         one_hot[self.ignore_index] = 0
-        self.register_buffer('one_hot', one_hot.unsqueeze(0))
+        self.register_buffer("one_hot", one_hot.unsqueeze(0))
 
         self.confidence = 1.0 - label_smoothing
 
@@ -252,7 +273,32 @@ class LabelSmoothingLoss(nn.Module):
         model_prob = self.one_hot.repeat(target.size(0), 1)
         model_prob.scatter_(1, target.unsqueeze(1), self.confidence)
         model_prob.masked_fill_((target == self.ignore_index).unsqueeze(1), 0)
-        return F.kl_div(output, model_prob, reduction='none')
+        return F.kl_div(output, model_prob, reduction="none")
+
+
+class UnlikelihoodTokenLoss(nn.Module):
+    """
+    With label smoothing,
+    KL-divergence between q_{smoothed ground truth prob.}(w)
+    and p_{prob. computed by model}(w) is minimized.
+    """
+
+    def __init__(self, unlikelihood_coeff, tgt_vocab_size, ignore_index=-100):
+        assert 0.0 < unlikelihood_coeff
+        self.ignore_index = ignore_index
+        super(UnlikelihoodTokenLoss, self).__init__()
+
+        self.likelihood_criterion = nn.NLLLoss(
+            ignore_index=ignore_index, reduction="none"
+        )
+        self.unlikelihood_coeff = unlikelihood_coeff
+
+    def forward(self, output, target):
+        """
+        output (FloatTensor): batch_size x n_classes
+        target (LongTensor): batch_size
+        """
+        self.likelihood_criterion(output, target)
 
 
 class CommonLossCompute(LossComputeBase):
@@ -261,8 +307,16 @@ class CommonLossCompute(LossComputeBase):
 
     Implement loss compatible with coverage and alignement shards
     """
-    def __init__(self, criterion, generator, normalization="sents",
-                 lambda_coverage=0.0, lambda_align=0.0, tgt_shift_index=1):
+
+    def __init__(
+        self,
+        criterion,
+        generator,
+        normalization="sents",
+        lambda_coverage=0.0,
+        lambda_align=0.0,
+        tgt_shift_index=1,
+    ):
         super(CommonLossCompute, self).__init__(criterion, generator)
         self.lambda_coverage = lambda_coverage
         self.lambda_align = lambda_align
@@ -281,11 +335,20 @@ class CommonLossCompute(LossComputeBase):
             "lambda_coverage != 0.0 requires attention mechanism"
             " that could not be found in the model."
         )
-        shard_state.update({"std_attn": attns.get("std"),
-                            "coverage_attn": coverage})
+        shard_state.update(
+            {"std_attn": attns.get("std"), "coverage_attn": coverage}
+        )
 
-    def _compute_loss(self, batch, output, target, std_attn=None,
-                      coverage_attn=None, align_head=None, ref_align=None):
+    def _compute_loss(
+        self,
+        batch,
+        output,
+        target,
+        std_attn=None,
+        coverage_attn=None,
+        align_head=None,
+        ref_align=None,
+    ):
 
         bottled_output = self._bottle(output)
 
@@ -294,12 +357,95 @@ class CommonLossCompute(LossComputeBase):
 
         loss = self.criterion(scores, gtruth)
         repeat_nb_tokens_test = None
+        if True:  # unlikelihood
+            with torch.no_grad():
+                # if target = [2 3 4 3 5] we build ctx_cands = [[0 0 0 0 0], [2 0 0 0 0], [2 3 0 0 0], [2 0 4 0 0], [2 3 4 3 0]]
+                # with the following steps -> expand [[2 3 4 3 5], [2 3 4 3 5], [2 3 4 3 5], [2 3 4 3 5], [2 3 4 3 5]]
+                # -> tril [[0 0 0 0 0], [2 0 0 0 0], [2 3 0 0 0], [2 3 4 0 0], [2 3 4 3 0]]
+                # -> masked fill (remove currend word from ctx) [[..], [..], [..], [2 O 4 0 0] , [..]]
+                # -> replace zeros with padding
+                # -> scatter to convert to one hot encoding before multiplication with prob
+                # print(target[:13, 0])
+                expanded_target = target.expand(
+                    target.size(0), target.size(0), target.size(1)
+                )
+                ctx_cands = (
+                    expanded_target.permute(2, 0, 1).tril(-1).permute(1, 2, 0)
+                )
+                # print(ctx_cands[:13, :13, 0])
+                # remove current word for ctx
+                ctx_cands = ctx_cands.masked_fill(
+                    ctx_cands == expanded_target.permute(1, 0, 2),
+                    self.padding_idx,
+                )
+                # upper triangular values to padding
+                ctx_cands = ctx_cands + self.padding_idx * torch.ones_like(
+                    ctx_cands
+                ).permute(2, 0, 1).triu().permute(1, 2, 0)
+                # print(ctx_cands[:13, :13, 0])
+                probs = self._unbottle(
+                    F.softmax(scores, dim=-1), ctx_cands.size(-1)
+                )
+                log_probs = -torch.clamp((1.0 - probs), min=1e-5).log()
+                # print(log_probs.shape)
+                one_hot_ctx_cands = torch.zeros_like(log_probs).scatter_(
+                    -1, ctx_cands.permute(0, 2, 1), 1
+                )
+                one_hot_ctx_cands[:, :, self.padding_idx] = 0
+                loss += (
+                    100
+                    * self._bottle(log_probs * one_hot_ctx_cands).sum(-1)
+                    / one_hot_ctx_cands.sum()
+                )
+                # print(one_hot_ctx_cands[2, 0, 13])
+                # print((log_probs*one_hot_ctx_cands).shape)
+                # print((log_probs*one_hot_ctx_cands)[2,0,13])
+                # print((log_probs*one_hot_ctx_cands)[2,0,12])
+                # print(loss.shape)
+                # raise ValueError
+
+            #     gtruth_fix = target.permute(1, 0).contiguous().view(-1)
+            #     ctx_cands = gtruth_fix.unsqueeze(0).expand(
+            #         gtruth_fix.size(0), gtruth_fix.size(0)
+            #     )
+            #     ctx_cands_ = ctx_cands.tril(-1) + self.padding_idx
+            #     ctx_cands_ = ctx_cands_ * ctx_cands_.triu()
+            #     ctx_cands = ctx_cands.tril(-1) + ctx_cands_
+
+            #     # Don't include the target for that timestep as a negative target.
+            #     probs = F.softmax(scores, dim=-1)
+            #     ctx_cands = ctx_cands.masked_fill(
+            #         ctx_cands == gtruth_fix.unsqueeze(1), self.padding_idx
+            #     )
+            #     negative_targets = torch.zeros_like(probs).scatter_(
+            #         1, ctx_cands.permute(1, 0), 1
+            #     )
+            # # - compute loss
+            # one_minus_probs = torch.clamp((1.0 - probs), min=1e-5)
+
+            # custom_loss = -torch.log(one_minus_probs) * negative_targets
+            # print(custom_loss.shape)
+            # print(custom_loss.sum(dim=-1)[:60])
+            # print(gtruth[:10])
+            # custom_loss = custom_loss.sum()
+            # print(custom_loss, loss.sum())
+            # print(negative_targets.shape)
+            # print(negative_targets[:10, :10])
+            # print(negative_targets.argmax(dim=-1)[:34])
+            # print(ctx_cands.shape)
+            # print(ctx_cands[:10])
+            # raise ValueError
+            # unlikelihood_loss =
+            # loss += unlikelihood_loss
         if loss.shape:
-            repeat_nb_tokens_test = self._bottle(batch.nb_tokens_test.repeat(target.size(0), 1, 1))
+            repeat_nb_tokens_test = self._bottle(
+                batch.nb_tokens_test.repeat(target.size(0), 1, 1)
+            )
             loss = loss.sum()
         if self.lambda_coverage != 0.0:
             coverage_loss = self._compute_coverage_loss(
-                std_attn=std_attn, coverage_attn=coverage_attn)
+                std_attn=std_attn, coverage_attn=coverage_attn
+            )
             loss += coverage_loss
         if self.lambda_align != 0.0:
             if align_head.dtype != loss.dtype:  # Fix FP16
@@ -307,9 +453,13 @@ class CommonLossCompute(LossComputeBase):
             if ref_align.dtype != loss.dtype:
                 ref_align = ref_align.to(loss.dtype)
             align_loss = self._compute_alignement_loss(
-                align_head=align_head, ref_align=ref_align)
+                align_head=align_head, ref_align=ref_align
+            )
             loss += align_loss
-        stats = self._stats(loss.clone(), scores, gtruth, repeat_nb_tokens_test)
+
+        stats = self._stats(
+            loss.clone(), scores, gtruth, repeat_nb_tokens_test
+        )
         return loss, stats
 
     def _compute_coverage_loss(self, std_attn, coverage_attn):
@@ -317,8 +467,9 @@ class CommonLossCompute(LossComputeBase):
         covloss *= self.lambda_coverage
         return covloss
 
-    def _add_align_shard_state(self, shard_state, batch, range_start,
-                               range_end, attns):
+    def _add_align_shard_state(
+        self, shard_state, batch, range_start, range_end, attns
+    ):
         # attn_align should be in (batch_size, pad_tgt_size, pad_src_size)
         attn_align = attns.get("align", None)
         # align_idx should be a Tensor in size([N, 3]), N is total number
@@ -377,26 +528,46 @@ class NMTLossCompute(CommonLossCompute):
     """
     Standard NMT Loss Computation.
     """
-    def __init__(self, criterion, generator, normalization="sents",
-                 lambda_coverage=0.0, lambda_align=0.0):
-        super(NMTLossCompute, self).__init__(criterion, generator,
-                                             normalization=normalization,
-                                             lambda_coverage=lambda_coverage,
-                                             lambda_align=lambda_align,
-                                             tgt_shift_index=1)
+
+    def __init__(
+        self,
+        criterion,
+        generator,
+        normalization="sents",
+        lambda_coverage=0.0,
+        lambda_align=0.0,
+    ):
+        super(NMTLossCompute, self).__init__(
+            criterion,
+            generator,
+            normalization=normalization,
+            lambda_coverage=lambda_coverage,
+            lambda_align=lambda_align,
+            tgt_shift_index=1,
+        )
 
 
 class LMLossCompute(CommonLossCompute):
     """
     Standard LM Loss Computation.
     """
-    def __init__(self, criterion, generator, normalization="sents",
-                 lambda_coverage=0.0, lambda_align=0.0):
-        super(LMLossCompute, self).__init__(criterion, generator,
-                                            normalization=normalization,
-                                            lambda_coverage=lambda_coverage,
-                                            lambda_align=lambda_align,
-                                            tgt_shift_index=0)
+
+    def __init__(
+        self,
+        criterion,
+        generator,
+        normalization="sents",
+        lambda_coverage=0.0,
+        lambda_align=0.0,
+    ):
+        super(LMLossCompute, self).__init__(
+            criterion,
+            generator,
+            normalization=normalization,
+            lambda_coverage=lambda_coverage,
+            lambda_align=lambda_align,
+            tgt_shift_index=0,
+        )
 
 
 def filter_shard_state(state, shard_size=None):
@@ -442,8 +613,12 @@ def shards(state, shard_size, eval_only=False):
         # want a sequence of dictionaries of tensors.
         # First, unzip the dictionary into a sequence of keys and a
         # sequence of tensor-like sequences.
-        keys, values = zip(*((k, [v_chunk for v_chunk in v_split])
-                             for k, (_, v_split) in non_none.items()))
+        keys, values = zip(
+            *(
+                (k, [v_chunk for v_chunk in v_split])
+                for k, (_, v_split) in non_none.items()
+            )
+        )
 
         # Now, yield a dictionary for each shard. The keys are always
         # the same. values is a sequence of length #keys where each
@@ -458,7 +633,11 @@ def shards(state, shard_size, eval_only=False):
         variables = []
         for k, (v, v_split) in non_none.items():
             if isinstance(v, torch.Tensor) and state[k].requires_grad:
-                variables.extend(zip(torch.split(state[k], shard_size),
-                                     [v_chunk.grad for v_chunk in v_split]))
+                variables.extend(
+                    zip(
+                        torch.split(state[k], shard_size),
+                        [v_chunk.grad for v_chunk in v_split],
+                    )
+                )
         inputs, grads = zip(*variables)
         torch.autograd.backward(inputs, grads)
