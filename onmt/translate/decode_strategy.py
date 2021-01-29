@@ -2,6 +2,8 @@ import torch
 from copy import deepcopy
 
 from onmt.utils.misc import tile
+import numpy as np
+from onmt.constants import SubwordMarker
 
 
 class DecodeStrategy(object):
@@ -306,3 +308,47 @@ class DecodeStrategy(object):
         """
 
         raise NotImplementedError()
+
+
+class StopAtKDecodeStrategy(DecodeStrategy):
+
+    def decode_alive_seq(self):
+        return [
+            [self.tgt_itos[i] for i in sent] for sent in self.alive_seq[:, 1:]
+        ]
+
+    def convert_decoded_alive_seq(self, decoded_alive_seq):
+        detokenized_alive_seq = [
+            self.tokenizer._detokenize(seq) for seq in decoded_alive_seq
+        ]
+        retokenized_alive_seq = [self.exact_match_tokenizer.tokenize(sent, escape=False)
+            for sent in detokenized_alive_seq]
+        return retokenized_alive_seq
+
+    def finished_word(self, decoded_alive_seq):
+        # for every element
+        # currently only for joiner
+        return [
+            not (s[-1].endswith(SubwordMarker.JOINER))
+            for s in decoded_alive_seq
+        ]
+
+    def finished_condition(self, topk_ids):
+        B_, parallel_paths = self.is_finished.shape
+        self.is_finished = self.is_finished.view(-1)
+        decoded_alive_seq = self.decode_alive_seq()
+        converted_decoded_alive_seq = self.convert_decoded_alive_seq(
+            decoded_alive_seq
+        )
+
+        return torch.from_numpy(
+                np.logical_and(
+                    np.array(self.finished_word(decoded_alive_seq)),
+                    np.array(
+                        [
+                            len(s) >= self.stop_at_k
+                            for s in converted_decoded_alive_seq
+                        ]
+                    ),
+                )
+            ).view(B_, parallel_paths).to(topk_ids.device)

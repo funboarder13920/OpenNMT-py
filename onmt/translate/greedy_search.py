@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 
-from onmt.translate.decode_strategy import DecodeStrategy
+from onmt.translate.decode_strategy import DecodeStrategy, StopAtKDecodeStrategy
 
 
 def sample_topp(logits, keep_topp):
@@ -132,6 +132,7 @@ class GreedySearch(DecodeStrategy):
         self.keep_topk = keep_topk
         self.keep_topp = keep_topp
         self.topk_scores = None
+        self.topk_scores = None
         self.beam_size = beam_size
 
     def initialize(self, memory_bank, src_lengths, src_map=None, device=None,
@@ -203,15 +204,18 @@ class GreedySearch(DecodeStrategy):
         topk_ids, self.topk_scores = self._pick(log_probs)
         self.beams_scores += self.topk_scores
 
-        self.is_finished = topk_ids.eq(self.eos)
-
         self.alive_seq = torch.cat([self.alive_seq, topk_ids], -1)
+        self.is_finished = self.finished_condition(topk_ids)
+
         if self.return_attention:
             if self.alive_attn is None:
                 self.alive_attn = attn
             else:
                 self.alive_attn = torch.cat([self.alive_attn, attn], 0)
         self.ensure_max_length()
+
+    def finished_condition(self, topk_ids):
+        return topk_ids.eq(self.eos)
 
     def update_finished(self):
         """Finalize scores and predictions."""
@@ -278,3 +282,56 @@ class GreedySearchLM(GreedySearch):
         src = fn_map_state(src, dim=1)
 
         return fn_map_state, src, self.memory_lengths, src_map
+
+
+class GreedySearchLMStopAtK(GreedySearchLM, StopAtKDecodeStrategy):
+    def __init__(
+        self,
+        pad,
+        bos,
+        eos,
+        unk,
+        batch_size,
+        global_scorer,
+        min_length,
+        block_ngram_repeat,
+        exclusion_tokens,
+        return_attention,
+        max_length,
+        sampling_temp,
+        keep_topk,
+        keep_topp,
+        beam_size,
+        ban_unk_token,
+        stop_at_k,
+        tokenizer,
+        exact_match_tokenizer,
+        tgt_itos,
+    ):
+        super(GreedySearchLMStopAtK, self).__init__(
+            pad,
+            bos,
+            eos,
+            unk,
+            batch_size,
+            global_scorer,
+            min_length,
+            block_ngram_repeat,
+            exclusion_tokens,
+            return_attention,
+            max_length,
+            sampling_temp,
+            keep_topk,
+            keep_topp,
+            beam_size,
+            ban_unk_token,
+        )
+        self.stop_at_k = stop_at_k
+        self.min_length = 1000
+        self.max_length = 1000
+        self.tokenizer = tokenizer
+        self.exact_match_tokenizer = exact_match_tokenizer
+        self.tgt_itos = tgt_itos
+
+    def finished_condition(self, topk_ids):
+        return StopAtKDecodeStrategy.finished_condition(self, topk_ids)

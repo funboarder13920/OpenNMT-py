@@ -710,6 +710,8 @@ def _add_decoding_opts(parser):
     group.add('--beta', '-beta', type=float, default=-0.,
               help="Coverage penalty parameter")
 
+    group.add('--stop_at_k', '-stop_at_k', type=int, default=0,
+              help="")
 
 def translate_opts(parser):
     """ Translation / inference options """

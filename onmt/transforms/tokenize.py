@@ -392,6 +392,12 @@ class ONMTTokenizerTransform(TokenizerTransform):
         segmented, _ = tokenizer.tokenize(sentence)
         return segmented
 
+    def _detokenize(self, tokens, side='tgt', is_train=False):
+        """Do OpenNMT Tokenizer's tokenize."""
+        tokenizer = self.load_models[side]
+        sent = tokenizer.detokenize(tokens)
+        return sent
+
     def apply(self, example, is_train=False, stats=None, **kwargs):
         """Apply OpenNMT Tokenizer to src & tgt."""
         src_out = self._tokenize(example['src'], 'src')

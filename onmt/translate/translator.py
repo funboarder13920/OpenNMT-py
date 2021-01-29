@@ -13,11 +13,15 @@ import onmt.model_builder
 import onmt.inputters as inputters
 import onmt.decoders.ensemble
 from onmt.translate.beam_search import BeamSearch, BeamSearchLM
+from onmt.translate.beam_search import BeamSearchLMStopAtK
 from onmt.translate.greedy_search import GreedySearch, GreedySearchLM
+from onmt.translate.greedy_search import GreedySearchLMStopAtK
 from onmt.utils.misc import tile, set_random_seed, report_matrix
 from onmt.utils.alignment import extract_alignment, build_align_pharaoh
 from onmt.modules.copy_generator import collapse_copy_scores
 from onmt.constants import ModelTask
+from onmt.transforms import get_transforms_cls
+from sacremoses import MosesTokenizer
 
 
 def build_translator(opt, report_score=True, logger=None, out_file=None):
@@ -30,7 +34,6 @@ def build_translator(opt, report_score=True, logger=None, out_file=None):
         else onmt.model_builder.load_test_model
     )
     fields, model, model_opt = load_test_model(opt)
-
     scorer = onmt.translate.GNMTGlobalScorer.from_opt(opt)
 
     if model_opt.model_task == ModelTask.LANGUAGE_MODEL:
@@ -152,6 +155,8 @@ class Inference(object):
         report_score=True,
         logger=None,
         seed=-1,
+        opt=None,
+        model_opt=None,
     ):
         self.model = model
         self.fields = fields
@@ -228,7 +233,8 @@ class Inference(object):
                 "scores": [],
                 "log_probs": [],
             }
-
+        self.opt = opt
+        self.model_opt = model_opt
         set_random_seed(seed, self._use_cuda)
 
     @classmethod
@@ -298,6 +304,8 @@ class Inference(object):
             report_score=report_score,
             logger=logger,
             seed=opt.seed,
+            opt=opt,
+            model_opt=model_opt,
         )
 
     def _log(self, msg):
@@ -317,7 +325,7 @@ class Inference(object):
         batch_size,
         src,
     ):
-        if "tgt" in batch.__dict__:
+        if False and "tgt" in batch.__dict__:
             gs = self._score_target(
                 batch,
                 memory_bank,
@@ -363,12 +371,12 @@ class Inference(object):
         if self.tgt_prefix and tgt is None:
             raise ValueError("Prefix should be feed to tgt if -tgt_prefix.")
 
+        # TODO: add tokenizer
         src_data = {"reader": self.src_reader, "data": src}
         tgt_data = {"reader": self.tgt_reader, "data": tgt}
         _readers, _data = inputters.Dataset.config(
             [("src", src_data), ("tgt", tgt_data)]
         )
-
         data = inputters.Dataset(
             self.fields,
             readers=_readers,
@@ -376,17 +384,39 @@ class Inference(object):
             sort_key=inputters.str2sortkey[self.data_type],
             filter_pred=self._filter_pred,
         )
+        transforms_cls = get_transforms_cls(self.model_opt._all_transform)
+        from onmt.transforms import make_transforms
+        from onmt.constants import CorpusName
+        from onmt.inputters.inputter import IterOnDevice
+        from onmt.inputters.corpus import ParallelCorpus
+        from onmt.inputters.dynamic_iterator import DynamicDatasetIter
 
-        data_iter = inputters.OrderedIterator(
-            dataset=data,
-            device=self._dev,
-            batch_size=batch_size,
-            batch_size_fn=max_tok_len if batch_type == "tokens" else None,
-            train=False,
-            sort=False,
-            sort_within_batch=True,
-            shuffle=False,
+        transforms = make_transforms(
+            self.model_opt, transforms_cls, self.fields
         )
+        self.tokenizer = transforms['onmt_tokenize']
+        self.exact_match_tokenizer = MosesTokenizer(lang='fr') if self.opt.stop_at_k else None
+
+        corpora = {
+            CorpusName.VALID: ParallelCorpus(
+                CorpusName.VALID, self.opt.src, self.opt.tgt or self.opt.src, None
+            )
+        }
+
+        data_iter = IterOnDevice(DynamicDatasetIter(
+            corpora,
+            {CorpusName.VALID: {"transforms": ["onmt_tokenize"], "weight": 1}},
+            transforms,
+            self.fields,
+            False,
+            "sents",
+            batch_size,
+            1,
+            data_type=self.model_opt.data_type,
+            bucket_size=self.model_opt.bucket_size,
+            pool_factor=self.model_opt.pool_factor,
+            skip_empty_level=self.model_opt.skip_empty_level,
+        ), self._gpu)
 
         xlation_builder = onmt.translate.TranslationBuilder(
             data,
@@ -395,6 +425,9 @@ class Inference(object):
             self.replace_unk,
             tgt,
             self.phrase_table,
+            tokenizer=self.tokenizer,
+            exact_match_tokenizer=self.exact_match_tokenizer,
+            stop_at_k=self.opt.stop_at_k,
         )
 
         # Statistics
@@ -412,15 +445,15 @@ class Inference(object):
                 batch, data.src_vocabs, attn_debug
             )
             translations = xlation_builder.from_batch(batch_data)
-
             for trans in translations:
                 all_scores += [trans.pred_scores[: self.n_best]]
                 pred_score_total += trans.pred_scores[0]
                 pred_words_total += len(trans.pred_sents[0])
                 if tgt is not None:
+                    # gold_score_total += trans.gold_score
+                    # gold_words_total += len(trans.gold_sent) + 1
                     gold_score_total += trans.gold_score
-                    gold_words_total += len(trans.gold_sent) + 1
-
+                    gold_words_total += 1
                 n_best_preds = [
                     " ".join(pred) for pred in trans.pred_sents[: self.n_best]
                 ]
@@ -481,7 +514,7 @@ class Inference(object):
 
         if self.report_score:
             msg = self._report_score(
-                "PRED", pred_score_total, pred_words_total
+                "PRED", pred_score_total.item(), pred_words_total
             )
             self._log(msg)
             if tgt is not None:
@@ -547,7 +580,7 @@ class Inference(object):
             msg = "%s No words predicted" % (name,)
         else:
             avg_score = score_total / words_total
-            ppl = np.exp(-score_total.item() / words_total)
+            ppl = np.exp(-score_total / words_total)
             msg = "%s AVG SCORE: %.4f, %s PPL: %.4f" % (
                 name,
                 avg_score,
@@ -765,7 +798,6 @@ class Translator(Inference):
         src, src_lengths = (
             batch.src if isinstance(batch.src, tuple) else (batch.src, None)
         )
-
         enc_states, memory_bank, src_lengths = self.model.encoder(
             src, src_lengths
         )
@@ -933,11 +965,13 @@ class GeneratorLM(Inference):
         phrase_table="",
     ):
         if batch_size != 1:
-            warning_msg = ("GeneratorLM does not support batch_size != 1"
-                           " nicely. You can remove this limitation here."
-                           " With batch_size > 1 the end of each input is"
-                           " repeated until the input is finished. Then"
-                           " generation will start.")
+            warning_msg = (
+                "GeneratorLM does not support batch_size != 1"
+                " nicely. You can remove this limitation here."
+                " With batch_size > 1 the end of each input is"
+                " repeated until the input is finished. Then"
+                " generation will start."
+            )
             if self.logger:
                 self.logger.info(warning_msg)
             else:
@@ -957,45 +991,93 @@ class GeneratorLM(Inference):
         """Translate a batch of sentences."""
         with torch.no_grad():
             if self.sample_from_topk != 0 or self.sample_from_topp != 0:
-                decode_strategy = GreedySearchLM(
-                    pad=self._tgt_pad_idx,
-                    bos=self._tgt_bos_idx,
-                    eos=self._tgt_eos_idx,
-                    unk=self._tgt_unk_idx,
-                    batch_size=batch.batch_size,
-                    global_scorer=self.global_scorer,
-                    min_length=self.min_length,
-                    max_length=self.max_length,
-                    block_ngram_repeat=self.block_ngram_repeat,
-                    exclusion_tokens=self._exclusion_idxs,
-                    return_attention=attn_debug or self.replace_unk,
-                    sampling_temp=self.random_sampling_temp,
-                    keep_topk=self.sample_from_topk,
-                    keep_topp=self.sample_from_topp,
-                    beam_size=self.beam_size,
-                    ban_unk_token=self.ban_unk_token,
-                )
+                if self.opt.stop_at_k:
+                    decode_strategy = GreedySearchLMStopAtK(
+                        pad=self._tgt_pad_idx,
+                        bos=self._tgt_bos_idx,
+                        eos=self._tgt_eos_idx,
+                        unk=self._tgt_unk_idx,
+                        batch_size=batch.batch_size,
+                        global_scorer=self.global_scorer,
+                        min_length=self.min_length,
+                        max_length=self.max_length,
+                        block_ngram_repeat=self.block_ngram_repeat,
+                        exclusion_tokens=self._exclusion_idxs,
+                        return_attention=attn_debug or self.replace_unk,
+                        sampling_temp=self.random_sampling_temp,
+                        keep_topk=self.sample_from_topk,
+                        keep_topp=self.sample_from_topp,
+                        beam_size=self.beam_size,
+                        ban_unk_token=self.ban_unk_token,
+                        stop_at_k=self.opt.stop_at_k,
+                        tokenizer=self.tokenizer,
+                        exact_match_tokenizer=self.exact_match_tokenizer,
+                        tgt_itos=self._tgt_vocab.itos,
+                    )
+                else:
+                    decode_strategy = GreedySearchLM(
+                        pad=self._tgt_pad_idx,
+                        bos=self._tgt_bos_idx,
+                        eos=self._tgt_eos_idx,
+                        unk=self._tgt_unk_idx,
+                        batch_size=batch.batch_size,
+                        global_scorer=self.global_scorer,
+                        min_length=self.min_length,
+                        max_length=self.max_length,
+                        block_ngram_repeat=self.block_ngram_repeat,
+                        exclusion_tokens=self._exclusion_idxs,
+                        return_attention=attn_debug or self.replace_unk,
+                        sampling_temp=self.random_sampling_temp,
+                        keep_topk=self.sample_from_topk,
+                        keep_topp=self.sample_from_topp,
+                        beam_size=self.beam_size,
+                        ban_unk_token=self.ban_unk_token,
+                    )
             else:
                 # TODO: support these blacklisted features
                 assert not self.dump_beam
-                decode_strategy = BeamSearchLM(
-                    self.beam_size,
-                    batch_size=batch.batch_size,
-                    pad=self._tgt_pad_idx,
-                    bos=self._tgt_bos_idx,
-                    eos=self._tgt_eos_idx,
-                    unk=self._tgt_unk_idx,
-                    n_best=self.n_best,
-                    global_scorer=self.global_scorer,
-                    min_length=self.min_length,
-                    max_length=self.max_length,
-                    return_attention=attn_debug or self.replace_unk,
-                    block_ngram_repeat=self.block_ngram_repeat,
-                    exclusion_tokens=self._exclusion_idxs,
-                    stepwise_penalty=self.stepwise_penalty,
-                    ratio=self.ratio,
-                    ban_unk_token=self.ban_unk_token,
-                )
+                if self.opt.stop_at_k:
+                    decode_strategy = BeamSearchLMStopAtK(
+                        self.beam_size,
+                        batch_size=batch.batch_size,
+                        pad=self._tgt_pad_idx,
+                        bos=self._tgt_bos_idx,
+                        eos=self._tgt_eos_idx,
+                        unk=self._tgt_unk_idx,
+                        n_best=self.n_best,
+                        global_scorer=self.global_scorer,
+                        min_length=self.min_length,
+                        max_length=self.max_length,
+                        return_attention=attn_debug or self.replace_unk,
+                        block_ngram_repeat=self.block_ngram_repeat,
+                        exclusion_tokens=self._exclusion_idxs,
+                        stepwise_penalty=self.stepwise_penalty,
+                        ratio=self.ratio,
+                        ban_unk_token=self.ban_unk_token,
+                        stop_at_k=self.opt.stop_at_k,
+                        tokenizer=self.tokenizer,
+                        exact_match_tokenizer=self.exact_match_tokenizer,
+                        tgt_itos=self._tgt_vocab.itos,
+                    )
+                else:
+                    decode_strategy = BeamSearchLM(
+                        self.beam_size,
+                        batch_size=batch.batch_size,
+                        pad=self._tgt_pad_idx,
+                        bos=self._tgt_bos_idx,
+                        eos=self._tgt_eos_idx,
+                        unk=self._tgt_unk_idx,
+                        n_best=self.n_best,
+                        global_scorer=self.global_scorer,
+                        min_length=self.min_length,
+                        max_length=self.max_length,
+                        return_attention=attn_debug or self.replace_unk,
+                        block_ngram_repeat=self.block_ngram_repeat,
+                        exclusion_tokens=self._exclusion_idxs,
+                        stepwise_penalty=self.stepwise_penalty,
+                        ratio=self.ratio,
+                        ban_unk_token=self.ban_unk_token,
+                    )
             return self._translate_batch_with_strategy(
                 batch, src_vocabs, decode_strategy
             )
@@ -1006,7 +1088,7 @@ class GeneratorLM(Inference):
         if min_len_batch > 0 and min_len_batch <= src.size(0):
             # hack [min_len_batch-1:] because expect <bos>
             target_prefix = (
-                src[min_len_batch - 1:]
+                src[min_len_batch - 1 :]
                 if min_len_batch > 0 and min_len_batch <= src.size(0)
                 else None
             )

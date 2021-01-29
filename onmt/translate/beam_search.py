@@ -1,6 +1,6 @@
 import torch
 from onmt.translate import penalties
-from onmt.translate.decode_strategy import DecodeStrategy
+from onmt.translate.decode_strategy import DecodeStrategy, StopAtKDecodeStrategy
 
 import warnings
 
@@ -315,8 +315,11 @@ class BeamSearchBase(DecodeStrategy):
                 beta=self.global_scorer.beta)
             self.topk_scores -= cov_penalty.view(_B, self.beam_size).float()
 
-        self.is_finished = self.topk_ids.eq(self.eos)
+        self.is_finished = self.finished_condition(self.topk_ids)
         self.ensure_max_length()
+
+    def finished_condition(self, topk_ids):
+        return topk_ids.eq(self.eos)
 
 
 class BeamSearch(BeamSearchBase):
@@ -382,6 +385,35 @@ class BeamSearchLM(BeamSearchBase):
             _B_old, self.beam_size) \
             .index_select(0, non_finished) \
             .view(_B_new * self.beam_size)
+
+
+class BeamSearchLMStopAtK(BeamSearchLM, StopAtKDecodeStrategy):
+    def __init__(
+        self,
+        beam_size, batch_size, pad, bos, eos, unk, n_best,
+                 global_scorer, min_length, max_length, return_attention,
+                 block_ngram_repeat, exclusion_tokens, stepwise_penalty,
+                 ratio, ban_unk_token, 
+        stop_at_k,
+        tokenizer,
+        exact_match_tokenizer,
+        tgt_itos,
+    ):
+        super(BeamSearchLMStopAtK, self).__init__(
+            beam_size, batch_size, pad, bos, eos, unk, n_best,
+                 global_scorer, min_length, max_length, return_attention,
+                 block_ngram_repeat, exclusion_tokens, stepwise_penalty,
+                 ratio, ban_unk_token
+        )
+        self.stop_at_k = stop_at_k
+        self.min_length = 1000
+        self.max_length = 1000
+        self.tokenizer = tokenizer
+        self.exact_match_tokenizer = exact_match_tokenizer
+        self.tgt_itos = tgt_itos
+
+    def finished_condition(self, topk_ids):
+        return StopAtKDecodeStrategy.finished_condition(self, topk_ids)
 
 
 class GNMTGlobalScorer(object):
