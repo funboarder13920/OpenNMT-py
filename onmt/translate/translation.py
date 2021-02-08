@@ -154,14 +154,22 @@ class TranslationBuilder(object):
             ]
             gold_sent = None
             if tgt is not None:
-                gold_sent = self.maybe_detokenize(
-                    self._build_target_tokens(
-                        src[:, b] if src is not None else None,
-                        src_vocab,
-                        src_raw,
-                        tgt[1:, b] if tgt is not None else None,
-                        None,
-                    )
+                gold_sent = self.exact_match_tokenizer.detokenize(
+                    self.exact_match_tokenizer.tokenize(
+                        " ".join(
+                            self.maybe_detokenize(
+                                self._build_target_tokens(
+                                    src[:, b] if src is not None else None,
+                                    src_vocab,
+                                    src_raw,
+                                    tgt[:, b]
+                                    if tgt is not None
+                                    else None,  # dangerous
+                                    None,
+                                )
+                            )
+                        )
+                    )[: self.stop_at_k]
                 )
             score = 0
             if self.stop_at_k:
@@ -175,11 +183,26 @@ class TranslationBuilder(object):
                         None,
                     )
                 )
-                current_target = self.exact_match_tokenizer.tokenize(" ".join(current_target), escape=False)
-                exact_match_tok_pred_sents = self.exact_match_tokenizer.tokenize(" ".join(pred_sents[0]), escape=False)
-                score = score_exact_match_at_k(
-                    exact_match_tok_pred_sents, current_target, self.stop_at_k
+                current_target = self.exact_match_tokenizer.tokenize(
+                    " ".join(current_target)
                 )
+                score = 0
+                for pred_sent in pred_sents:
+                    exact_match_tok_pred_sents = (
+                        self.exact_match_tokenizer.tokenize(
+                            " ".join(pred_sent)
+                        )
+                    )
+                    score = max(
+                        score,
+                        score_exact_match_at_k(
+                            exact_match_tok_pred_sents,
+                            current_target,
+                            self.stop_at_k,
+                        ),
+                    )
+                    if score == 1:
+                        break
             translation = Translation(
                 src[:, b] if src is not None else None,
                 src_raw,
@@ -247,13 +270,13 @@ class Translation(object):
         Log translation.
         """
 
-        msg = ["\nSENT {}: {}\n".format(sent_number, " ".join(self.src_raw))]
+        msg = [" ".join(self.src_raw)]
 
         best_pred = self.pred_sents[0]
         best_score = self.pred_scores[0]
         pred_sent = " ".join(best_pred)
-        msg.append("PRED {}: {}\n".format(sent_number, pred_sent))
-        msg.append("PRED SCORE: {:.4f}\n".format(best_score))
+        msg.append("{}".format(pred_sent))
+        msg.append("{:.4f}".format(best_score))
 
         if self.word_aligns is not None:
             pred_align = self.word_aligns[0]
@@ -263,13 +286,13 @@ class Translation(object):
 
         if self.gold_sent is not None:
             tgt_sent = " ".join(self.gold_sent)
-            msg.append("GOLD {}: {}\n".format(sent_number, tgt_sent))
-            msg.append(("GOLD SCORE: {:.4f}\n".format(self.gold_score)))
-        if len(self.pred_sents) > 1:
-            msg.append("\nBEST HYP:\n")
-            for score, sent in zip(
-                self.pred_scores, [" ".join(sent) for sent in self.pred_sents]
-            ):
-                msg.append("[{:.4f}] {}\n".format(score, sent))
+            msg.append("{}".format(tgt_sent))
+            msg.append(("{:.4f}".format(self.gold_score)))
+        # if len(self.pred_sents) > 1:
+        #     msg.append("\nBEST HYP:\n")
+        #     for score, sent in zip(
+        #         self.pred_scores, [" ".join(sent) for sent in self.pred_sents]
+        #     ):
+        #         msg.append("[{:.4f}] {}\n".format(score, sent))
 
-        return "".join(msg)
+        return "\t".join(msg) + "\n"

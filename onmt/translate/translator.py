@@ -21,7 +21,19 @@ from onmt.utils.alignment import extract_alignment, build_align_pharaoh
 from onmt.modules.copy_generator import collapse_copy_scores
 from onmt.constants import ModelTask
 from onmt.transforms import get_transforms_cls
-from sacremoses import MosesTokenizer
+from sacremoses import MosesTokenizer, MosesDetokenizer
+
+
+class SubMosesTokenizer:
+    def __init__(self):
+        self.tokenizer = MosesTokenizer(lang='fr')
+        self.detokenizer = MosesDetokenizer(lang='fr')
+
+    def tokenize(self, sent):
+        return self.tokenizer.tokenize(sent, escape=False)
+
+    def detokenize(self, tokens):
+        return self.detokenizer.detokenize(tokens).split()
 
 
 def build_translator(opt, report_score=True, logger=None, out_file=None):
@@ -395,7 +407,7 @@ class Inference(object):
             self.model_opt, transforms_cls, self.fields
         )
         self.tokenizer = transforms['onmt_tokenize']
-        self.exact_match_tokenizer = MosesTokenizer(lang='fr') if self.opt.stop_at_k else None
+        self.exact_match_tokenizer = SubMosesTokenizer() if self.opt.stop_at_k else None
 
         corpora = {
             CorpusName.VALID: ParallelCorpus(
@@ -478,7 +490,7 @@ class Inference(object):
                 if self.verbose:
                     sent_number = next(counter)
                     output = trans.log(sent_number)
-                    if self.logger:
+                    if False and self.logger:
                         self.logger.info(output)
                     else:
                         os.write(1, output.encode("utf-8"))

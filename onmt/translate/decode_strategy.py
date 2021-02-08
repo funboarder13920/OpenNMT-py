@@ -321,7 +321,7 @@ class StopAtKDecodeStrategy(DecodeStrategy):
         detokenized_alive_seq = [
             self.tokenizer._detokenize(seq) for seq in decoded_alive_seq
         ]
-        retokenized_alive_seq = [self.exact_match_tokenizer.tokenize(sent, escape=False)
+        retokenized_alive_seq = [self.exact_match_tokenizer.tokenize(sent)
             for sent in detokenized_alive_seq]
         return retokenized_alive_seq
 
@@ -329,7 +329,31 @@ class StopAtKDecodeStrategy(DecodeStrategy):
         # for every element
         # currently only for joiner
         return [
-            not (s[-1].endswith(SubwordMarker.JOINER))
+            not (
+                s[-1].endswith(SubwordMarker.JOINER)
+                or s[-1]
+                in {
+                    "d",
+                    "j",
+                    "l",
+                    "s",
+                    "n",
+                    "m",
+                    "t",
+                    "aujourd",
+                    "0",
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5",
+                    "6",
+                    "7",
+                    "8",
+                    "9",
+                }
+                or s[-1].endswith("qu")
+            )
             for s in decoded_alive_seq
         ]
 
