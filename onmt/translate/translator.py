@@ -22,6 +22,7 @@ from onmt.modules.copy_generator import collapse_copy_scores
 from onmt.constants import ModelTask
 from onmt.transforms import get_transforms_cls
 from sacremoses import MosesTokenizer, MosesDetokenizer
+from collections import Counter
 
 
 class SubMosesTokenizer:
@@ -440,12 +441,13 @@ class Inference(object):
             tokenizer=self.tokenizer,
             exact_match_tokenizer=self.exact_match_tokenizer,
             stop_at_k=self.opt.stop_at_k,
+            close_beam=self.opt.close_beam,
         )
 
         # Statistics
         counter = count(1)
         pred_score_total, pred_words_total = 0, 0
-        gold_score_total, gold_words_total = 0, 0
+        gold_score_total, gold_words_total = Counter(), 0
 
         all_scores = []
         all_predictions = []
@@ -464,7 +466,8 @@ class Inference(object):
                 if tgt is not None:
                     # gold_score_total += trans.gold_score
                     # gold_words_total += len(trans.gold_sent) + 1
-                    gold_score_total += trans.gold_score
+                    for k,v in trans.gold_score.items():
+                        gold_score_total[k] += v
                     gold_words_total += 1
                 n_best_preds = [
                     " ".join(pred) for pred in trans.pred_sents[: self.n_best]
@@ -526,9 +529,9 @@ class Inference(object):
 
         if self.report_score:
             msg = self._report_score(
-                "PRED", pred_score_total.item(), pred_words_total
+                "PRED", {"pred": pred_score_total.item()}, pred_words_total
             )
-            self._log(msg)
+            # self._log(msg)
             if tgt is not None:
                 msg = self._report_score(
                     "GOLD", gold_score_total, gold_words_total
@@ -591,14 +594,14 @@ class Inference(object):
         if words_total == 0:
             msg = "%s No words predicted" % (name,)
         else:
-            avg_score = score_total / words_total
-            ppl = np.exp(-score_total / words_total)
-            msg = "%s AVG SCORE: %.4f, %s PPL: %.4f" % (
-                name,
-                avg_score,
-                name,
-                ppl,
-            )
+            msg = "\n"
+            for k, _score_total in score_total.items():
+                avg_score = _score_total / words_total
+                ppl = np.exp(-_score_total / words_total)
+                msg += "%s\t%.4f\n" % (
+                    k,
+                    avg_score,
+                )
         return msg
 
     def _decode_and_generate(
@@ -691,6 +694,7 @@ class Inference(object):
         }
 
         results["scores"] = decode_strategy.scores
+        results["scores_history"] = decode_strategy.scores_history
         results["predictions"] = decode_strategy.predictions
         results["attention"] = decode_strategy.attention
         if self.report_align:
@@ -1003,7 +1007,7 @@ class GeneratorLM(Inference):
         """Translate a batch of sentences."""
         with torch.no_grad():
             if self.sample_from_topk != 0 or self.sample_from_topp != 0:
-                if self.opt.stop_at_k:
+                if self.opt.close_beam:
                     decode_strategy = GreedySearchLMStopAtK(
                         pad=self._tgt_pad_idx,
                         bos=self._tgt_bos_idx,
@@ -1048,7 +1052,7 @@ class GeneratorLM(Inference):
             else:
                 # TODO: support these blacklisted features
                 assert not self.dump_beam
-                if self.opt.stop_at_k:
+                if self.opt.close_beam:
                     decode_strategy = BeamSearchLMStopAtK(
                         self.beam_size,
                         batch_size=batch.batch_size,

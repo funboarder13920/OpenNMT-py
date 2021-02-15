@@ -109,6 +109,9 @@ class BeamSearchBase(DecodeStrategy):
         # buffers for the topk scores and 'backpointer'
         self.topk_scores = torch.empty((self.batch_size, self.beam_size),
                                        dtype=torch.float, device=device)
+        self.topk_scores_history = torch.empty(
+            [self.batch_size * self.beam_size, 0],
+            dtype=torch.long, device=device)
         self.topk_ids = torch.empty((self.batch_size, self.beam_size),
                                     dtype=torch.long, device=device)
         self._batch_index = torch.empty([self.batch_size, self.beam_size],
@@ -157,6 +160,7 @@ class BeamSearchBase(DecodeStrategy):
         self.is_finished = self.is_finished.to('cpu')
         self.top_beam_finished |= self.is_finished[:, 0].eq(1)
         predictions = self.alive_seq.view(_B_old, self.beam_size, step)
+        topk_scores_history = self.topk_scores_history.view(_B_old, self.beam_size, step-1)
         attention = (
             self.alive_attn.view(
                 step - 1, _B_old, self.beam_size, self.alive_attn.size(-1))
@@ -175,7 +179,8 @@ class BeamSearchBase(DecodeStrategy):
                     self.topk_scores[i, j],
                     predictions[i, j, 1:],  # Ignore start_token.
                     attention[:, i, j, :self.memory_lengths[i]]
-                    if attention is not None else None))
+                    if attention is not None else None,
+                    topk_scores_history[i, j]))
             # End condition is the top beam finished and we can return
             # n_best hypotheses.
             if self.ratio > 0:
@@ -188,13 +193,14 @@ class BeamSearchBase(DecodeStrategy):
             if finish_flag and len(self.hypotheses[b]) >= self.n_best:
                 best_hyp = sorted(
                     self.hypotheses[b], key=lambda x: x[0], reverse=True)
-                for n, (score, pred, attn) in enumerate(best_hyp):
+                for n, (score, pred, attn, score_history) in enumerate(best_hyp):
                     if n >= self.n_best:
                         break
                     self.scores[b].append(score)
                     self.predictions[b].append(pred)  # ``(batch, n_best,)``
                     self.attention[b].append(
                         attn if attn is not None else [])
+                    self.scores_history[b].append(score_history)
             else:
                 non_finished_batch.append(i)
         non_finished = torch.tensor(non_finished_batch)
@@ -221,6 +227,9 @@ class BeamSearchBase(DecodeStrategy):
         self.alive_seq = predictions.index_select(0, non_finished) \
             .view(-1, self.alive_seq.size(-1))
         self.topk_scores = self.topk_scores.index_select(0, non_finished)
+
+        topk_scores_history_shape = self.topk_scores_history.shape
+        self.topk_scores_history = self.topk_scores_history.view(_B_old, self.beam_size, topk_scores_history_shape[-1]).index_select(0, non_finished).view(-1,topk_scores_history_shape[-1])
         self.topk_ids = self.topk_ids.index_select(0, non_finished)
         self.maybe_update_target_prefix(self.select_indices)
         if self.alive_attn is not None:
@@ -284,6 +293,9 @@ class BeamSearchBase(DecodeStrategy):
         self.alive_seq = torch.cat(
             [self.alive_seq.index_select(0, self.select_indices),
              self.topk_ids.view(_B * self.beam_size, 1)], -1)
+
+        self.topk_scores_history = torch.cat([self.topk_scores_history.index_select(0, self.select_indices),
+            self.topk_scores.view(_B * self.beam_size, 1)], -1)
 
         self.maybe_update_forbidden_tokens()
 

@@ -4,15 +4,40 @@ import torch
 from onmt.constants import DefaultTokens
 from onmt.inputters.text_dataset import TextMultiField
 from onmt.utils.alignment import build_align_pharaoh
+from collections import Counter
+import numpy as np
 
-
-def score_exact_match_at_k(pred, tgt, k=5):
+def score_exact_match_at_k(pred, tgt, k=5, soft=False):
     assert len(tgt) >= k, f"tgt too short for exact match at {k}"
     max_k = min([len(pred), len(tgt), k])
+    pred_counter = Counter(pred[:min(len(pred), k)])
+    tgt_counter = Counter(tgt[:min(len(tgt), k)])
+    intersect_counter = pred_counter & tgt_counter
+
+    soft_score = sum(intersect_counter.values())/k
+
+    return soft_score if soft else int(soft_score == 1)
     # score = 0
     # for i in range(max_k):
     #     score += pred[i] == tgt[i]
-    return 1 if " ".join(pred[:max_k]) == " ".join(tgt[:max_k]) else 0
+    return 1 if len(pred) >= min(k, len(tgt)) and " ".join(pred[:max_k]) == " ".join(tgt[:max_k]) else 0
+
+
+def fix_pred_sents(pred_sents, stop_at_k, exact_match_tokenizer):
+    new_pred_sents = []
+    for pred_sent in pred_sents:
+        if (pred_sent and ( pred_sent[-1] in {
+                        "d",
+                        "j",
+                        "l",
+                        "s",
+                        "n",
+                        "m",
+                        "t",
+                        "aujourd"} or pred_sent[-1].endswith('qu'))):
+            pred_sent[-1] += "'"
+        new_pred_sents.append(exact_match_tokenizer.tokenize(" ".join(pred_sent))[:stop_at_k])
+    return new_pred_sents
 
 
 class TranslationBuilder(object):
@@ -41,7 +66,8 @@ class TranslationBuilder(object):
         phrase_table="",
         tokenizer=None,
         exact_match_tokenizer=None,
-        stop_at_k=None
+        stop_at_k=None,
+        close_beam=False,
     ):
         self.data = data
         self.fields = fields
@@ -62,6 +88,7 @@ class TranslationBuilder(object):
         self.tokenizer = tokenizer
         self.exact_match_tokenizer = exact_match_tokenizer
         self.stop_at_k = stop_at_k
+        self.close_beam = close_beam
 
     def maybe_detokenize(self, sequence):
         if self.tokenizer:
@@ -99,12 +126,13 @@ class TranslationBuilder(object):
         )
         batch_size = batch.batch_size
 
-        preds, pred_score, attn, align, gold_score, indices = list(
+        preds, pred_score, pred_score_history, attn, align, gold_score, indices = list(
             zip(
                 *sorted(
                     zip(
                         translation_batch["predictions"],
                         translation_batch["scores"],
+                        translation_batch["scores_history"],
                         translation_batch["attention"],
                         translation_batch["alignment"],
                         translation_batch["gold_score"],
@@ -186,31 +214,40 @@ class TranslationBuilder(object):
                 current_target = self.exact_match_tokenizer.tokenize(
                     " ".join(current_target)
                 )
-                score = 0
-                for pred_sent in pred_sents:
-                    exact_match_tok_pred_sents = (
-                        self.exact_match_tokenizer.tokenize(
-                            " ".join(pred_sent)
+                scores_at_k = Counter()
+                pred_sents = fix_pred_sents(pred_sents, 10, self.exact_match_tokenizer)
+                if self.close_beam:
+                    for exact_match_tok_pred_sents in pred_sents:
+                        scores_at_k[self.stop_at_k] = max(
+                            scores_at_k[self.stop_at_k],
+                            score_exact_match_at_k(
+                                exact_match_tok_pred_sents,
+                                current_target,
+                                self.stop_at_k,
+                            ),
                         )
-                    )
-                    score = max(
-                        score,
-                        score_exact_match_at_k(
-                            exact_match_tok_pred_sents,
-                            current_target,
-                            self.stop_at_k,
-                        ),
-                    )
-                    if score == 1:
-                        break
+                else:
+                    for all_stop_a_k in range(1, 1+self.stop_at_k):
+                        for exact_match_tok_pred_sents in pred_sents:
+                            scores_at_k[all_stop_a_k] = max(
+                                scores_at_k[all_stop_a_k],
+                                score_exact_match_at_k(
+                                    exact_match_tok_pred_sents,
+                                    current_target,
+                                    all_stop_a_k,
+                                ),
+                            )
+                            if scores_at_k[all_stop_a_k] == 1:
+                                break
             translation = Translation(
                 src[:, b] if src is not None else None,
                 src_raw,
                 pred_sents,
                 attn[b],
                 pred_score[b],
+                pred_score_history[b],
                 gold_sent,
-                score,
+                scores_at_k,
                 align[b],
             )
             translations.append(translation)
@@ -240,6 +277,7 @@ class Translation(object):
         "pred_sents",
         "attns",
         "pred_scores",
+        "pred_scores_history",
         "gold_sent",
         "gold_score",
         "word_aligns",
@@ -252,6 +290,7 @@ class Translation(object):
         pred_sents,
         attn,
         pred_scores,
+        pred_scores_history,
         tgt_sent,
         gold_score,
         word_aligns,
@@ -261,6 +300,7 @@ class Translation(object):
         self.pred_sents = pred_sents
         self.attns = attn
         self.pred_scores = pred_scores
+        self.pred_scores_history = pred_scores_history
         self.gold_sent = tgt_sent
         self.gold_score = gold_score
         self.word_aligns = word_aligns
@@ -274,8 +314,9 @@ class Translation(object):
 
         best_pred = self.pred_sents[0]
         best_score = self.pred_scores[0]
+        best_score_history = self.pred_scores_history[0]
         pred_sent = " ".join(best_pred)
-        msg.append("{}".format(pred_sent))
+        msg.append("{}".format("\t".join([" ".join(_pred_sent) for _pred_sent in self.pred_sents]))) # affichage de toutes les phrases avec séparateur |
         msg.append("{:.4f}".format(best_score))
 
         if self.word_aligns is not None:
@@ -287,7 +328,9 @@ class Translation(object):
         if self.gold_sent is not None:
             tgt_sent = " ".join(self.gold_sent)
             msg.append("{}".format(tgt_sent))
-            msg.append(("{:.4f}".format(self.gold_score)))
+            msg.append("\t".join(["{:.4f}".format(gold_score) for k,gold_score in self.gold_score.items()]))
+            msg.append("scores:")
+            msg.append("\t".join([f"{s}" for s in  best_score_history.cpu()]))
         # if len(self.pred_sents) > 1:
         #     msg.append("\nBEST HYP:\n")
         #     for score, sent in zip(

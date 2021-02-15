@@ -83,6 +83,7 @@ class DecodeStrategy(object):
         # result caching
         self.predictions = [[] for _ in range(batch_size)]
         self.scores = [[] for _ in range(batch_size)]
+        self.scores_history = [[] for _ in range(batch_size)]
         self.attention = [[] for _ in range(batch_size)]
         self.hypotheses = [[] for _ in range(batch_size)]
 
@@ -329,30 +330,33 @@ class StopAtKDecodeStrategy(DecodeStrategy):
         # for every element
         # currently only for joiner
         return [
-            not (
-                s[-1].endswith(SubwordMarker.JOINER)
-                or s[-1]
-                in {
-                    "d",
-                    "j",
-                    "l",
-                    "s",
-                    "n",
-                    "m",
-                    "t",
-                    "aujourd",
-                    "0",
-                    "1",
-                    "2",
-                    "3",
-                    "4",
-                    "5",
-                    "6",
-                    "7",
-                    "8",
-                    "9",
-                }
-                or s[-1].endswith("qu")
+            (
+                not (
+                    s[-1].endswith(SubwordMarker.JOINER)
+                #     or s[-1]
+                #     in {
+                #         "d",
+                #         "j",
+                #         "l",
+                #         "s",
+                #         "n",
+                #         "m",
+                #         "t",
+                #         "aujourd",
+                #         "0",
+                #         "1",
+                #         "2",
+                #         "3",
+                #         "4",
+                #         "5",
+                #         "6",
+                #         "7",
+                #         "8",
+                #         "9",
+                #     }
+                #     or s[-1].endswith("qu")
+                )
+                or s[-1] == "￭'￭"
             )
             for s in decoded_alive_seq
         ]
@@ -365,14 +369,26 @@ class StopAtKDecodeStrategy(DecodeStrategy):
             decoded_alive_seq
         )
 
-        return torch.from_numpy(
-                np.logical_and(
-                    np.array(self.finished_word(decoded_alive_seq)),
+        return (
+            torch.from_numpy(
+                np.logical_or(
                     np.array(
                         [
-                            len(s) >= self.stop_at_k
+                            len(s) > self.stop_at_k
                             for s in converted_decoded_alive_seq
                         ]
                     ),
+                    np.logical_and(
+                        np.array(self.finished_word(decoded_alive_seq)),
+                        np.array(
+                            [
+                                len(s) == self.stop_at_k
+                                for s in converted_decoded_alive_seq
+                            ]
+                        ),
+                    ),
                 )
-            ).view(B_, parallel_paths).to(topk_ids.device)
+            )
+            .view(B_, parallel_paths)
+            .to(topk_ids.device)
+        )

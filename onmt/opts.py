@@ -42,6 +42,10 @@ def _add_logging_opts(parser, is_train=True):
                   type=str, default="runs/onmt",
                   help="Log directory for Tensorboard. "
                        "This is also the name of the run.")
+        group.add("--tensorboard_force_new_log_dir",
+                  "-tensorboard_force_new_log_dir", action="store_true",
+                  help="Write tensorboard output in a new directory."
+                  " Usually used when training from a model.")
     else:
         # Options only during inference
         group.add('--verbose', '-verbose', action="store_true",
@@ -712,6 +716,7 @@ def _add_decoding_opts(parser):
 
     group.add('--stop_at_k', '-stop_at_k', type=int, default=0,
               help="")
+    group.add('--close_beam', '-close_beam', action="store_true")
 
 def translate_opts(parser):
     """ Translation / inference options """
