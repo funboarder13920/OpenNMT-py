@@ -695,6 +695,7 @@ class Inference(object):
 
         results["scores"] = decode_strategy.scores
         results["scores_history"] = decode_strategy.scores_history
+        results["scores_stepwise_history"] = decode_strategy.scores_stepwise_history
         results["predictions"] = decode_strategy.predictions
         results["attention"] = decode_strategy.attention
         if self.report_align:

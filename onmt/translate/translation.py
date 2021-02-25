@@ -23,10 +23,8 @@ def score_exact_match_at_k(pred, tgt, k=5, soft=False):
     return 1 if len(pred) >= min(k, len(tgt)) and " ".join(pred[:max_k]) == " ".join(tgt[:max_k]) else 0
 
 
-def fix_pred_sents(pred_sents, stop_at_k, exact_match_tokenizer):
-    new_pred_sents = []
-    for pred_sent in pred_sents:
-        if (pred_sent and ( pred_sent[-1] in {
+def fix_pred_sent(pred_sent, stop_at_k, exact_match_tokenizer):
+    if (pred_sent and ( pred_sent[-1] in {
                         "d",
                         "j",
                         "l",
@@ -35,9 +33,8 @@ def fix_pred_sents(pred_sents, stop_at_k, exact_match_tokenizer):
                         "m",
                         "t",
                         "aujourd"} or pred_sent[-1].endswith('qu'))):
-            pred_sent[-1] += "'"
-        new_pred_sents.append(exact_match_tokenizer.tokenize(" ".join(pred_sent))[:stop_at_k])
-    return new_pred_sents
+        pred_sent[-1] += "'"
+    return exact_match_tokenizer.tokenize(" ".join(pred_sent))[:stop_at_k]
 
 
 class TranslationBuilder(object):
@@ -126,13 +123,14 @@ class TranslationBuilder(object):
         )
         batch_size = batch.batch_size
 
-        preds, pred_score, pred_score_history, attn, align, gold_score, indices = list(
+        preds, pred_score, pred_score_history, pred_score_stepwise_history, attn, align, gold_score, indices = list(
             zip(
                 *sorted(
                     zip(
                         translation_batch["predictions"],
                         translation_batch["scores"],
                         translation_batch["scores_history"],
+                        translation_batch["scores_stepwise_history"],
                         translation_batch["attention"],
                         translation_batch["alignment"],
                         translation_batch["gold_score"],
@@ -215,7 +213,8 @@ class TranslationBuilder(object):
                     " ".join(current_target)
                 )
                 scores_at_k = Counter()
-                pred_sents = fix_pred_sents(pred_sents, 10, self.exact_match_tokenizer)
+                stepwise_scores = [dict() for _ in pred_score_stepwise_history[b]]
+                pred_sents = [fix_pred_sent(pred_sent, 10, self.exact_match_tokenizer) for pred_sent in pred_sents]
                 if self.close_beam:
                     for exact_match_tok_pred_sents in pred_sents:
                         scores_at_k[self.stop_at_k] = max(
@@ -227,18 +226,36 @@ class TranslationBuilder(object):
                             ),
                         )
                 else:
-                    for all_stop_a_k in range(1, 1+self.stop_at_k):
+                    for all_stop_at_k in range(1, 1+self.stop_at_k):
                         for exact_match_tok_pred_sents in pred_sents:
-                            scores_at_k[all_stop_a_k] = max(
-                                scores_at_k[all_stop_a_k],
+                            scores_at_k[all_stop_at_k] = max(
+                                scores_at_k[all_stop_at_k],
                                 score_exact_match_at_k(
                                     exact_match_tok_pred_sents,
                                     current_target,
-                                    all_stop_a_k,
+                                    all_stop_at_k,
                                 ),
                             )
-                            if scores_at_k[all_stop_a_k] == 1:
+                            if scores_at_k[all_stop_at_k] == 1:
                                 break
+                    for i , (score_step, pred_step) in enumerate(pred_score_stepwise_history[b]):
+                        for all_stop_at_k in range(1, 1+self.stop_at_k):
+                            pred_step_sent = fix_pred_sent(self.maybe_detokenize(
+                                    self._build_target_tokens(
+                                        None,
+                                        src_vocab,
+                                        None,
+                                        pred_step.view(pred_step.size(-1)),
+                                        None,
+                                    )
+                                ), 10, self.exact_match_tokenizer)
+                            exact_match = score_exact_match_at_k(
+                                    pred_step_sent,
+                                    current_target,
+                                    all_stop_at_k,
+                                )
+                            stepwise_scores[i][all_stop_at_k] = (score_step, exact_match)
+
             translation = Translation(
                 src[:, b] if src is not None else None,
                 src_raw,
@@ -246,8 +263,10 @@ class TranslationBuilder(object):
                 attn[b],
                 pred_score[b],
                 pred_score_history[b],
+                pred_score_stepwise_history[b],
                 gold_sent,
                 scores_at_k,
+                stepwise_scores,
                 align[b],
             )
             translations.append(translation)
@@ -278,8 +297,10 @@ class Translation(object):
         "attns",
         "pred_scores",
         "pred_scores_history",
+        "pred_scores_stepwise_history",
         "gold_sent",
         "gold_score",
+        "stepwise_scores",
         "word_aligns",
     ]
 
@@ -291,8 +312,10 @@ class Translation(object):
         attn,
         pred_scores,
         pred_scores_history,
+        pred_scores_stepwise_history,
         tgt_sent,
         gold_score,
+        stepwise_scores,
         word_aligns,
     ):
         self.src = src
@@ -301,9 +324,11 @@ class Translation(object):
         self.attns = attn
         self.pred_scores = pred_scores
         self.pred_scores_history = pred_scores_history
+        self.pred_scores_stepwise_history = pred_scores_stepwise_history
         self.gold_sent = tgt_sent
         self.gold_score = gold_score
         self.word_aligns = word_aligns
+        self.stepwise_scores = stepwise_scores
 
     def log(self, sent_number):
         """

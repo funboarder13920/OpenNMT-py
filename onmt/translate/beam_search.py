@@ -150,6 +150,22 @@ class BeamSearchBase(DecodeStrategy):
         topk_scores, topk_ids = torch.topk(curr_scores, self.beam_size, dim=-1)
         return topk_scores, topk_ids
 
+    def save_history(self):
+        assert self.batch_size == 1, "save history no supported for batch_size != 1 because of change in batch order during decoding"
+
+        step = self.alive_seq.shape[-1]
+        scores, indices = self.topk_scores.topk(1, dim=-1)
+        predictions = self.alive_seq.view(self.batch_size, -1, step)
+
+        if self.beam_size == self.topk_scores.size(-1):
+            self.scores_stepwise_history[0].append((scores, predictions[:, indices,1:]))
+        else:
+            prev_scores, prev_preds = self.scores_stepwise_history[0][-1]
+            if prev_scores > scores:
+                self.scores_stepwise_history[0].append((prev_scores, prev_preds))
+            else:
+                self.scores_stepwise_history[0].append((scores, predictions[:, indices,1:]))
+
     def update_finished(self):
         # Penalize beams that finished.
         _B_old = self.topk_log_probs.shape[0]
@@ -329,6 +345,7 @@ class BeamSearchBase(DecodeStrategy):
 
         self.is_finished = self.finished_condition(self.topk_ids)
         self.ensure_max_length()
+        self.save_history()
 
     def finished_condition(self, topk_ids):
         return topk_ids.eq(self.eos)
