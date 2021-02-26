@@ -5,6 +5,7 @@ import os
 import time
 import numpy as np
 from itertools import count, zip_longest
+import pickle
 
 import torch
 
@@ -451,6 +452,7 @@ class Inference(object):
 
         all_scores = []
         all_predictions = []
+        all_stepwise_scores = []
 
         start_time = time.time()
 
@@ -463,6 +465,7 @@ class Inference(object):
                 all_scores += [trans.pred_scores[: self.n_best]]
                 pred_score_total += trans.pred_scores[0]
                 pred_words_total += len(trans.pred_sents[0])
+                all_stepwise_scores.append(trans.stepwise_scores)
                 if tgt is not None:
                     # gold_score_total += trans.gold_score
                     # gold_words_total += len(trans.gold_sent) + 1
@@ -555,6 +558,11 @@ class Inference(object):
             json.dump(
                 self.translator.beam_accum,
                 codecs.open(self.dump_beam, "w", "utf-8"),
+            )
+        if True:
+            pickle.dump(
+                all_stepwise_scores,
+                open('/nas-labs/LM/valentin_work/OpenNMT-py/data_run/fr_filtered/exactmatch/pickle/lr3_stepwise_scores.p', 'wb')
             )
         return all_scores, all_predictions
 
