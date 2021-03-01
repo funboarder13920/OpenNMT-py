@@ -4,7 +4,7 @@ import torch
 from onmt.constants import DefaultTokens
 from onmt.inputters.text_dataset import TextMultiField
 from onmt.utils.alignment import build_align_pharaoh
-from collections import Counter
+from collections import Counter, defaultdict
 import numpy as np
 
 def score_exact_match_at_k(pred, tgt, k=5, soft=False):
@@ -213,7 +213,7 @@ class TranslationBuilder(object):
                     " ".join(current_target)
                 )
                 scores_at_k = Counter()
-                stepwise_scores = [dict() for _ in pred_score_stepwise_history[b]]
+                stepwise_scores = defaultdict(dict)
                 pred_sents = [fix_pred_sent(pred_sent, 10, self.exact_match_tokenizer) for pred_sent in pred_sents]
                 if self.close_beam:
                     for exact_match_tok_pred_sents in pred_sents:
@@ -238,8 +238,19 @@ class TranslationBuilder(object):
                             )
                             if scores_at_k[all_stop_at_k] == 1:
                                 break
-                    for i , (score_step, pred_step) in enumerate(pred_score_stepwise_history[b]):
-                        for all_stop_at_k in range(1, 1+self.stop_at_k):
+                    for all_stop_at_k in range(1, 1+self.stop_at_k):
+                        _, last_pred_step = pred_score_stepwise_history[b][-1]
+                        last_pred_step_sent = fix_pred_sent(self.maybe_detokenize(
+                                    self._build_target_tokens(
+                                        None,
+                                        src_vocab,
+                                        None,
+                                        last_pred_step.view(last_pred_step.size(-1)),
+                                        None,
+                                    )
+                                ), 10, self.exact_match_tokenizer)
+                        last_is_ok = (len(last_pred_step_sent) >= all_stop_at_k)
+                        for i, (score_step, pred_step) in enumerate(pred_score_stepwise_history[b]):
                             pred_step_sent = fix_pred_sent(self.maybe_detokenize(
                                     self._build_target_tokens(
                                         None,
@@ -249,6 +260,8 @@ class TranslationBuilder(object):
                                         None,
                                     )
                                 ), 10, self.exact_match_tokenizer)
+                            if last_is_ok and len(pred_step_sent) < all_stop_at_k:
+                                continue
                             exact_match = score_exact_match_at_k(
                                     pred_step_sent,
                                     current_target,
