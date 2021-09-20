@@ -80,22 +80,17 @@ class CTranslate2Translator(object):
     reproduce the onmt.translate.translator API.
     """
 
-    def __init__(self, model_path, device, device_index, batch_size,
-                 beam_size, n_best, ct2_translator_args,
-                 ct2_translate_batch_args, target_prefix=False,
-                 preload=False):
+    def __init__(self, model_path, ct2_translator_args,
+                 ct2_translate_batch_args, preload=False):
         import ctranslate2
         self.translator = ctranslate2.Translator(
             model_path,
-            device=device,
-            device_index=device_index,
             **ct2_translator_args,
             )
         self.ct2_translate_batch_args = ct2_translate_batch_args
-        self.batch_size = batch_size
-        self.beam_size = beam_size
-        self.n_best = n_best
-        self.target_prefix = target_prefix
+        self.use_target_prefix = self.ct2_translate_batch_args.get(
+                "use_target_prefix", True)
+        del self.ct2_translate_batch_args["use_target_prefix"]
         if preload:
             # perform a first request to initialize everything
             dummy_translation = self.translate(["a"])
@@ -110,12 +105,9 @@ class CTranslate2Translator(object):
             tgt = [item.split(" ") for item in tgt]
         preds = self.translator.translate_batch(
             batch,
-            target_prefix=tgt if self.target_prefix else None,
-            max_batch_size=self.batch_size,
-            beam_size=self.beam_size,
-            num_hypotheses=self.n_best,
+            target_prefix=tgt if self.use_target_prefix else None,
             return_scores=True,
-            **self.opt.ct2_translate_batch_args,
+            **self.ct2_translate_batch_args,
         )
         scores = [[item["score"] for item in ex] for ex in preds]
         predictions = [[" ".join(item["tokens"]) for item in ex]
@@ -160,11 +152,16 @@ class TranslationServer(object):
                       'model_root': conf.get('model_root', self.models_root),
                       'ct2_model': conf.get('ct2_model', None)
                       }
-            if conf.get('ct2_model') is not None:
-                conf.update(self.get_kwargs_ct2_args(conf))
+            assert (conf.get("ct2_model") is None or conf.get("opt") is None
+                ), "ct2_model cannot be defined with opt. "\
+                    "Use ct2_translator_args and ct2_translate_batch_args"\
+                    " for CTranslate2 options."
+            if conf.get("ct2_model") is not None:
+                opt = self.get_kwargs_ct2_args(conf)
+            else:
+                opt = conf["opt"]
             kwargs = {k: v for (k, v) in kwargs.items() if v is not None}
             model_id = conf.get("id", None)
-            opt = conf["opt"]
             opt["models"] = conf["models"]
             self.preload_model(opt, model_id=model_id, **kwargs)
 
@@ -175,8 +172,6 @@ class TranslationServer(object):
         ct2_translator_args.setdefault("inter_threads", 1)
         ct2_translator_args.setdefault("intra_threads", 1)
         ct2_translator_args.setdefault("compute_type", "default")
-        ct2_translator_args.setdefault("max_decoding_length", conf['max_length'])
-        ct2_translator_args.setdefault("min_decoding_length", conf['min_length'])
         return {"ct2_translator_args": ct2_translator_args,
                 "ct2_translate_batch_args": ct2_translate_batch_args}
 
@@ -404,14 +399,8 @@ class ServerModel(object):
             if self.ct2_model is not None:
                 self.translator = CTranslate2Translator(
                     self.ct2_model,
-                    device="cuda" if self.opt.cuda else "cpu",
-                    device_index=self.opt.gpu if self.opt.cuda else 0,
-                    batch_size=self.opt.batch_size,
-                    beam_size=self.opt.beam_size,
-                    n_best=self.opt.n_best,
                     ct2_translator_args=self.opt.ct2_translator_args,
                     ct2_translate_batch_args=self.opt.ct2_translate_batch_args,
-                    target_prefix=self.opt.tgt_prefix,
                     preload=preload,
                     )
             else:
