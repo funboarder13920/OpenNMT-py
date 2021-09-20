@@ -160,8 +160,8 @@ class TranslationServer(object):
                       'model_root': conf.get('model_root', self.models_root),
                       'ct2_model': conf.get('ct2_model', None)
                       }
-            if kwargs['ct2_model'] is not None:
-                kwargs.update(self.get_kwargs_ct2_args(conf))
+            if conf.get('ct2_model') is not None:
+                conf.update(self.get_kwargs_ct2_args(conf))
             kwargs = {k: v for (k, v) in kwargs.items() if v is not None}
             model_id = conf.get("id", None)
             opt = conf["opt"]
@@ -175,6 +175,8 @@ class TranslationServer(object):
         ct2_translator_args.setdefault("inter_threads", 1)
         ct2_translator_args.setdefault("intra_threads", 1)
         ct2_translator_args.setdefault("compute_type", "default")
+        ct2_translator_args.setdefault("max_decoding_length", conf['max_length'])
+        ct2_translator_args.setdefault("min_decoding_length", conf['min_length'])
         return {"ct2_translator_args": ct2_translator_args,
                 "ct2_translate_batch_args": ct2_translate_batch_args}
 
