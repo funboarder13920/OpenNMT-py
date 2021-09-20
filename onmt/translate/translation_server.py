@@ -90,7 +90,8 @@ class CTranslate2Translator(object):
         self.ct2_translate_batch_args = ct2_translate_batch_args
         self.use_target_prefix = self.ct2_translate_batch_args.get(
                 "use_target_prefix", True)
-        del self.ct2_translate_batch_args["use_target_prefix"]
+        if "use_target_prefix" in self.ct2_translate_batch_args:
+            del self.ct2_translate_batch_args["use_target_prefix"]
         if preload:
             # perform a first request to initialize everything
             dummy_translation = self.translate(["a"])
@@ -142,6 +143,13 @@ class TranslationServer(object):
                     raise ValueError("""Incorrect config file: missing 'models'
                                         parameter for model #%d""" % i)
             check_model_config(conf, self.models_root)
+
+            assert (conf.get("ct2_model") is None or conf.get("opt") is None
+                ), "ct2_model cannot be defined with opt. "\
+                    "Use ct2_translator_args and ct2_translate_batch_args"\
+                    " for CTranslate2 options."
+            if conf.get("ct2_model") is not None:
+                conf.update(self.get_kwargs_ct2_args(conf))
             kwargs = {'timeout': conf.get('timeout', None),
                       'load': conf.get('load', None),
                       'preprocess_opt': conf.get('preprocess', None),
@@ -150,18 +158,13 @@ class TranslationServer(object):
                       'custom_opt': conf.get('custom_opt', None),
                       'on_timeout': conf.get('on_timeout', None),
                       'model_root': conf.get('model_root', self.models_root),
-                      'ct2_model': conf.get('ct2_model', None)
+                      'ct2_model': conf.get('ct2_model', None),
+                      'ct2_translator_args': conf.get('ct2_translator_args', None),
+                      'ct2_translate_batch_args': conf.get('ct2_translate_batch_args', None),
                       }
-            assert (conf.get("ct2_model") is None or conf.get("opt") is None
-                ), "ct2_model cannot be defined with opt. "\
-                    "Use ct2_translator_args and ct2_translate_batch_args"\
-                    " for CTranslate2 options."
-            if conf.get("ct2_model") is not None:
-                opt = self.get_kwargs_ct2_args(conf)
-            else:
-                opt = conf["opt"]
             kwargs = {k: v for (k, v) in kwargs.items() if v is not None}
             model_id = conf.get("id", None)
+            opt = conf["opt"]
             opt["models"] = conf["models"]
             self.preload_model(opt, model_id=model_id, **kwargs)
 
@@ -173,7 +176,8 @@ class TranslationServer(object):
         ct2_translator_args.setdefault("intra_threads", 1)
         ct2_translator_args.setdefault("compute_type", "default")
         return {"ct2_translator_args": ct2_translator_args,
-                "ct2_translate_batch_args": ct2_translate_batch_args}
+                "ct2_translate_batch_args": ct2_translate_batch_args,
+                "opt": dict()}
 
     def clone_model(self, model_id, opt, timeout=-1):
         """Clone a model `model_id`.
@@ -274,7 +278,8 @@ class ServerModel(object):
 
     def __init__(self, opt, model_id, preprocess_opt=None, tokenizer_opt=None,
                  postprocess_opt=None, custom_opt=None, load=False, timeout=-1,
-                 on_timeout="to_cpu", model_root="./", ct2_model=None):
+                 on_timeout="to_cpu", model_root="./", ct2_model=None,
+                 ct2_translator_args=None, ct2_translate_batch_args=None):
         self.model_root = model_root
         self.opt = self.parse_opt(opt)
         self.custom_opt = custom_opt
@@ -288,6 +293,8 @@ class ServerModel(object):
 
         self.ct2_model = os.path.join(model_root, ct2_model) \
             if ct2_model is not None else None
+        self.ct2_translator_args = ct2_translator_args
+        self.ct2_translate_batch_args = ct2_translate_batch_args
 
         self.unload_timer = None
         self.user_opt = opt
@@ -399,8 +406,8 @@ class ServerModel(object):
             if self.ct2_model is not None:
                 self.translator = CTranslate2Translator(
                     self.ct2_model,
-                    ct2_translator_args=self.opt.ct2_translator_args,
-                    ct2_translate_batch_args=self.opt.ct2_translate_batch_args,
+                    ct2_translator_args=self.ct2_translator_args,
+                    ct2_translate_batch_args=self.ct2_translate_batch_args,
                     preload=preload,
                     )
             else:
