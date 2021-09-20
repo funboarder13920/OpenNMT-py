@@ -81,15 +81,17 @@ class CTranslate2Translator(object):
     """
 
     def __init__(self, model_path, device, device_index, batch_size,
-                 beam_size, n_best, target_prefix=False, preload=False):
+                 beam_size, n_best, ct2_translator_args,
+                 ct2_translate_batch_args, target_prefix=False,
+                 preload=False):
         import ctranslate2
         self.translator = ctranslate2.Translator(
             model_path,
             device=device,
             device_index=device_index,
-            inter_threads=1,
-            intra_threads=1,
-            compute_type="default")
+            **ct2_translator_args,
+            )
+        self.ct2_translate_batch_args = ct2_translate_batch_args
         self.batch_size = batch_size
         self.beam_size = beam_size
         self.n_best = n_best
@@ -113,6 +115,7 @@ class CTranslate2Translator(object):
             beam_size=self.beam_size,
             num_hypotheses=self.n_best,
             return_scores=True,
+            **self.opt.ct2_translate_batch_args,
         )
         scores = [[item["score"] for item in ex] for ex in preds]
         predictions = [[" ".join(item["tokens"]) for item in ex]
@@ -157,11 +160,23 @@ class TranslationServer(object):
                       'model_root': conf.get('model_root', self.models_root),
                       'ct2_model': conf.get('ct2_model', None)
                       }
+            if kwargs['ct2_model'] is not None:
+                kwargs.update(self.get_kwargs_ct2_args(conf))
             kwargs = {k: v for (k, v) in kwargs.items() if v is not None}
             model_id = conf.get("id", None)
             opt = conf["opt"]
             opt["models"] = conf["models"]
             self.preload_model(opt, model_id=model_id, **kwargs)
+
+    @staticmethod
+    def get_kwargs_ct2_args(conf):
+        ct2_translator_args = conf.get("ct2_translator_args", dict())
+        ct2_translate_batch_args = conf.get("ct2_translate_batch_args", dict())
+        ct2_translator_args.setdefault("inter_threads", 1)
+        ct2_translator_args.setdefault("intra_threads", 1)
+        ct2_translator_args.setdefault("compute_type", "default")
+        return {"ct2_translator_args": ct2_translator_args,
+                "ct2_translate_batch_args": ct2_translate_batch_args}
 
     def clone_model(self, model_id, opt, timeout=-1):
         """Clone a model `model_id`.
@@ -392,8 +407,11 @@ class ServerModel(object):
                     batch_size=self.opt.batch_size,
                     beam_size=self.opt.beam_size,
                     n_best=self.opt.n_best,
+                    ct2_translator_args=self.opt.ct2_translator_args,
+                    ct2_translate_batch_args=self.opt.ct2_translate_batch_args,
                     target_prefix=self.opt.tgt_prefix,
-                    preload=preload)
+                    preload=preload,
+                    )
             else:
                 self.translator = build_translator(
                     self.opt, report_score=False,
